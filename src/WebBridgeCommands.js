@@ -2,6 +2,8 @@ var __INK_TO_CARD_COMMANDS__ = (function () {
   var native = __INK_TO_CARD_NATIVE__;
   return {
     readCurrent: function (addon) { return native.snapshot(addon); },
+    readNote: function (addon, payload) { return native.readNote(addon, payload); },
+    trackNote: function (addon, payload) { return native.trackNote(addon, payload); },
     inspectSources: function (addon, payload) { return native.inspectSources(addon, payload); },
     exportDrawingSample: function (addon, payload) { return native.exportDrawingSample(addon, payload); },
     saveSettings: function (addon, payload) { return native.saveSettings(addon, payload); },

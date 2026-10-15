@@ -30,9 +30,37 @@ var __INK_TO_CARD_NATIVE__ = (function () {
   function current(addon) {
     var study = Application.sharedInstance().studyController(addon.window);
     var notebook = study && study.notebookController;
+    if (addon.inkClassicTracking) return classicTarget(addon, notebook);
+    if (addon.inkSceneMode && addon.inkTargetId && notebook) {
+      var tracked = database().getNoteById(addon.inkTargetId);
+      if (tracked && String(tracked.notebookId) === String(notebook.notebookId)) return tracked;
+      addon.inkTargetId = null;
+    }
     var note = notebook && (notebook.focusNote || notebook.visibleFocusNote);
+    if (addon.inkSceneMode && note && String(note.notebookId) !== String(notebook.notebookId)) return null;
     if (!note || !String(note.noteId || "")) return null;
     return note;
+  }
+  function classicTarget(addon, notebook) {
+    if (!notebook || addon.inkNotebookOpen === false || addon.inkInactive) return null;
+    var topic = String(notebook.notebookId || "");
+    function fresh(candidate) {
+      for (var depth = 0; candidate && depth < 3 && !value(candidate, "noteId"); depth += 1) candidate = value(candidate, "note");
+      var id = String(value(candidate, "noteId") || ""), note = id && database().getNoteById(id);
+      return note && String(note.notebookId) === topic ? note : null;
+    }
+    if (addon.inkTargetTopic !== topic) { addon.inkTargetId = null; addon.inkTargetTopic = topic; }
+    var selection = value(value(notebook, "mindmapView"), "selViewLst");
+    var selected = list(selection), candidate = selected.length === 1 ? fresh(selected[0]) : null;
+    // 优先实际单选；取消选中或进入编辑时继续读取已记住的卡片，不跳回旧焦点。
+    if (!candidate && addon.inkTargetId) candidate = fresh({ noteId: addon.inkTargetId });
+    if (!candidate || selection === undefined || selection === null) {
+      var focus = fresh(notebook.focusNote || notebook.visibleFocusNote);
+      candidate = focus || candidate;
+    }
+    var id = candidate ? String(candidate.noteId) : null;
+    if (id !== addon.inkTargetId) { addon.inkTargetId = id; addon.inkSceneEpoch = (addon.inkSceneEpoch || 0) + 1; }
+    return candidate;
   }
   function comments(note) {
     return list(note.comments).map(function (comment, index) {
@@ -66,16 +94,46 @@ var __INK_TO_CARD_NATIVE__ = (function () {
   function snapshot(addon) {
     var note = current(addon), study = Application.sharedInstance().studyController(addon.window);
     var notebook = study && study.notebookController, topic = notebook && String(notebook.notebookId || "");
-    if (!note) return { available: false, topicId: topic, reason: "请在脑图中选中一张卡片，再点击刷新" };
-    return describeNote(database().getNoteById(String(note.noteId)) || note);
+    var result = !note ? { available: false, topicId: topic, reason: addon.inkSceneMode ? "等待手写批注变化；也可先在脑图中选一张卡片" : "请在脑图中选中一张卡片，再点击刷新" }
+      : describeNote(database().getNoteById(String(note.noteId)) || note);
+    if (addon.inkSceneMode || addon.inkClassicTracking) {
+      result.scene = !!addon.inkSceneMode; result.tracking = !!addon.inkClassicTracking;
+      result.scopeToken = scopeToken(addon); result.settings = settings(topic);
+    }
+    return result;
+  }
+  function scopeToken(addon) {
+    var study = Application.sharedInstance().studyController(addon.window), notebook = study && study.notebookController;
+    return String(addon.inkSceneEpoch || 0) + ":" + String(notebook && notebook.notebookId || "");
+  }
+  function requireSceneScope(addon, payload) {
+    if ((addon.inkSceneMode || addon.inkClassicTracking) && payload.scopeToken !== scopeToken(addon)) throw new Error("学习窗口或学习集已变化，已取消旧识别结果");
   }
   function requireNote(addon, id) {
     if (addon.inkNotebookOpen === false || addon.inkInactive === true) throw new Error("学习集已关闭或 MN 已进入后台，已取消识别");
+    if (addon.inkSceneMode) {
+      var study = Application.sharedInstance().studyController(addon.window), notebook = study && study.notebookController;
+      var tracked = database().getNoteById(id);
+      if (!notebook || !tracked || String(tracked.notebookId) !== String(notebook.notebookId)) throw new Error("卡片不属于当前学习集或已不存在");
+      return tracked;
+    }
     var note = current(addon);
     if (!note || String(note.noteId) !== id) throw new Error("当前卡片已变化，请重新选中卡片后识别");
     var fresh = database().getNoteById(id);
     if (!fresh) throw new Error("卡片已不存在");
     return fresh;
+  }
+  function readNote(addon, payload) {
+    if (!addon.inkSceneMode) throw new Error("按卡片身份跟踪需要 MN5 场景接口");
+    if (typeof payload.noteId !== "string" || !payload.noteId || payload.noteId.length > 128) throw new Error("卡片身份无效");
+    var note = requireNote(addon, payload.noteId), result = describeNote(note);
+    result.scene = true; result.scopeToken = scopeToken(addon);
+    return result;
+  }
+  function trackNote(addon, payload) {
+    var result = readNote(addon, payload);
+    addon.inkTargetId = result.noteId;
+    return result;
   }
   function inspectSources(addon, payload) {
     var focus = current(addon), fresh = requireNote(addon, payload.noteId);
@@ -140,9 +198,16 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     return report;
   }
   function saveSettings(addon, payload) {
-    var note = requireNote(addon, payload.noteId);
+    requireSceneScope(addon, payload);
+    var topic;
+    if (addon.inkSceneMode || addon.inkClassicTracking) {
+      if (addon.inkNotebookOpen === false || addon.inkInactive) throw new Error("学习集已关闭或 MN 已进入后台");
+      var study = Application.sharedInstance().studyController(addon.window), notebook = study && study.notebookController;
+      topic = String(notebook && notebook.notebookId || "");
+      if (!topic || topic !== payload.topicId) throw new Error("学习集已变化，请重新读取设置");
+    } else { topic = String(requireNote(addon, payload.noteId).notebookId); }
     var normalized = config.normalize(payload.settings);
-    write("settings." + String(note.notebookId), normalized);
+    write("settings." + topic, normalized);
     return normalized;
   }
   function media(addon, payload) {
@@ -227,6 +292,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     return { filename: filename, bytes: bytes, saveRequested: true };
   }
   function apply(addon, payload) {
+    requireSceneScope(addon, payload);
     return applyForNote(requireNote(addon, payload.noteId), payload);
   }
   function applyForNote(note, payload) {
@@ -263,5 +329,6 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     media: media, apply: apply, inspectSources: inspectSources,
     exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, database: database,
     settings: settings, describeNote: describeNote, latestDrawing: latestDrawing,
-    drawingMedia: drawingMedia, applyForNote: applyForNote };
+    drawingMedia: drawingMedia, applyForNote: applyForNote,
+    readNote: readNote, trackNote: trackNote, scopeToken: scopeToken };
 })();

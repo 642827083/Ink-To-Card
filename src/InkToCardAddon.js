@@ -2,14 +2,18 @@ function createInkToCardAddon(mainPath) {
   return JSB.defineClass("InkToCardAddon : JSExtension", {
     sceneWillConnect: function () {
       var addon = self;
+      addon.inkClassicTracking = true;
+      addon.inkSceneEpoch = 1;
+      addon.inkTargetId = null;
+      addon.inkTargetTopic = null;
       addon.inkPanel = __INK_TO_CARD_PANEL__.create(addon, mainPath);
-      addon.inkTimer = NSTimer.scheduledTimerWithTimeInterval(1.2, true, function () {
+      addon.inkTimer = NSTimer.scheduledTimerWithTimeInterval(0.3, true, function () {
         if (!addon.inkPanel || !addon.inkPanel.ready || !addon.inkNotebookOpen || addon.inkInactive) return;
         __INK_TO_CARD_PANEL__.evaluate(addon.inkPanel, "window.InkToCardApp&&window.InkToCardApp.tick()");
       });
       console.log("[Ink To Card] 已初始化 MN4 经典插件");
     },
-    sceneWillResignActive: function () { self.inkInactive = true; self.inkBatch = null; },
+    sceneWillResignActive: function () { self.inkInactive = true; self.inkBatch = null; self.inkSceneEpoch += 1; },
     sceneDidBecomeActive: function () { self.inkInactive = false; },
     sceneDidDisconnect: function () {
       if (self.inkTimer) self.inkTimer.invalidate();
@@ -22,12 +26,21 @@ function createInkToCardAddon(mainPath) {
       self.inkPanel = null;
       self.inkNotebookOpen = false;
       self.inkBatch = null;
+      self.inkTargetId = null;
+      self.inkTargetTopic = null;
+      self.inkSceneEpoch += 1;
     },
     notebookWillOpen: function () {
+      self.inkTargetId = null;
+      self.inkTargetTopic = null;
+      self.inkSceneEpoch += 1;
       self.inkNotebookOpen = true;
       if (self.inkPanel) __INK_TO_CARD_PANEL__.attach(self.inkPanel);
     },
     notebookWillClose: function () {
+      self.inkTargetId = null;
+      self.inkTargetTopic = null;
+      self.inkSceneEpoch += 1;
       self.inkNotebookOpen = false;
       self.inkBatch = null;
       if (self.inkPanel) self.inkPanel.view.hidden = true;

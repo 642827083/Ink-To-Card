@@ -1,6 +1,6 @@
 var InkToCardApp = (function () {
   var config = __INK_TO_CARD_CONFIG__, state = null, rendered = "", busy = false, saving = false, polling = false;
-  var observation = "", attempted = new Map(), lastAuto = false, diagnosing = false, batch = null;
+  var observation = "", observedAt = 0, attempted = new Map(), lastAuto = false, diagnosing = false, batch = null;
   function element(id) { return document.getElementById(id); }
   function configurationEnabled(enabled) {
     ["auto", "policy", "min-pixels", "dominance"].forEach(function (id) { element(id).disabled = !enabled; });
@@ -8,8 +8,9 @@ var InkToCardApp = (function () {
   }
   function controls() {
     var available = !!(state && state.available), idle = !busy && !saving;
-    configurationEnabled(available && idle);
-    element("dominance").disabled = !available || !idle || state.settings.policy !== "dominant";
+    var configurable = !!(state && (available || state.tracking && state.topicId));
+    configurationEnabled(configurable && idle);
+    element("dominance").disabled = !configurable || !idle || state.settings.policy !== "dominant";
     element("preview").disabled = !available || !state.source || !idle;
     element("recognize").disabled = !available || !state.source || !idle;
     element("inspect-sources").disabled = !available || !idle || diagnosing;
@@ -57,7 +58,7 @@ var InkToCardApp = (function () {
     badge.className = "badge" + (snapshot.source ? " bound" : "");
     element("recognize").disabled = !snapshot.source || busy;
     if (!snapshot.source) status("没有可读取的手写绘图，普通图片不参与自动识别。");
-    if (!available) { controls(); return; }
+    if (!available && !(snapshot.tracking && snapshot.topicId)) { controls(); return; }
     var settings = snapshot.settings;
     element("auto").checked = settings.auto;
     element("policy").value = settings.policy;
@@ -78,7 +79,7 @@ var InkToCardApp = (function () {
     }
   }
   async function save() {
-    if (!state || !state.available || saving || busy) return;
+    if (!state || !(state.available || state.tracking && state.topicId) || saving || busy) return;
     saving = true;
     configurationEnabled(false);
     var snapshot = state, settings = config.normalize(snapshot.settings);
@@ -86,7 +87,7 @@ var InkToCardApp = (function () {
     settings.minPixels = Number(element("min-pixels").value); settings.dominance = Number(element("dominance").value);
     config.colors.forEach(function (color) { settings.mapping[color.id] = Number(element("map-" + color.id).value); });
     try {
-      await MNBridge.send("saveSettings", { noteId: snapshot.noteId, settings: settings });
+      await MNBridge.send("saveSettings", { noteId: snapshot.noteId, topicId: snapshot.topicId, scopeToken: snapshot.scopeToken, settings: settings });
       observation = ""; element("settings-status").textContent = "设置已保存";
     } catch (error) { status(error.message, true); }
     finally { saving = false; await refresh(); controls(); }
@@ -163,8 +164,8 @@ var InkToCardApp = (function () {
       image.src = dataURL;
     });
   }
-  async function recognize(snapshot, automatic) {
-    if (busy || saving || !snapshot || !snapshot.source) return;
+  async function recognize(snapshot, automatic, valid) {
+    if (busy || saving || !snapshot || !snapshot.source) return false;
     busy = true; controls();
     try {
       status(automatic ? "正在自动识别…" : "正在识别笔迹颜色…");
@@ -172,14 +173,16 @@ var InkToCardApp = (function () {
       var media = await MNBridge.send("readMedia", { noteId: snapshot.noteId, index: source.index, hash: source.hash });
       var image = await pixels(media.dataURL);
       var histogram = InkToCardCore.histogram(image.data, image.width, image.height, snapshot.settings);
+      if (valid && !valid()) return true;
       var result = await MNBridge.send("applyResult", { noteId: snapshot.noteId, index: source.index, hash: source.hash,
-        settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, histogram: histogram });
+        settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, histogram: histogram, scopeToken: snapshot.scopeToken });
       showCounts(result.counts);
       var color = config.colors.find(function (item) { return item.id === result.color; });
       status((color ? color.label + "笔迹 · " : "") + result.reason);
       if (automatic) lastAuto = true;
     } catch (error) { status(error.message, true); }
     finally { busy = false; await refresh(); controls(); }
+    return true;
   }
   async function runBatch(scope) {
     if (busy || saving || diagnosing || InkToCardStartup.failed()) return;
@@ -243,11 +246,13 @@ var InkToCardApp = (function () {
     try {
       var snapshot = await MNBridge.send("readCurrent"); render(snapshot);
       if (!snapshot.available || !snapshot.settings.auto || !snapshot.source) { observation = ""; return; }
-      var key = snapshot.noteId + ":" + snapshot.source.hash + ":" + JSON.stringify(snapshot.settings);
-      // 连续两次看到相同媒体后才识别；撤销和手动改卡色不会重触发同一媒体。
-      if (key !== observation) { observation = key; return; }
-      if (attempted.has(key)) return;
-      attempted.set(key, true);
+      var key = snapshot.scopeToken + ":" + snapshot.noteId + ":" + snapshot.source.index + ":" + snapshot.source.hash + ":" + JSON.stringify(snapshot.settings);
+      // 至少间隔 300 毫秒确认同一媒体，避免积压的定时回调跳过稳定等待。
+      if (key !== observation) { observation = key; observedAt = Date.now(); return; }
+      if (Date.now() - observedAt < 300) return;
+      var attemptKey = snapshot.topicId + ":" + snapshot.noteId + ":" + snapshot.source.index + ":" + snapshot.source.hash + ":" + JSON.stringify(snapshot.settings);
+      if (attempted.has(attemptKey)) return;
+      attempted.set(attemptKey, true);
       if (attempted.size > 100) attempted.delete(attempted.keys().next().value);
       await recognize(snapshot, true);
     } catch (error) { status(error.message, true); }
@@ -287,7 +292,7 @@ var InkToCardApp = (function () {
     element("recognize").addEventListener("click", async function () { await refresh(); await recognize(state, false); });
     InkToCardStartup.initialized();
     refresh();
-    if (window.InkToCardDemoBridge) setInterval(tick, 1200);
+    if (window.InkToCardDemoBridge) setInterval(tick, 300);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
   return { tick: tick, refresh: refresh, runBatch: runBatch, cancelBatch: cancelBatch, inspectSources: inspectSources, exportDrawingSample: exportDrawingSample, lastAuto: function () { return lastAuto; } };
