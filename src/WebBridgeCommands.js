@@ -8,6 +8,7 @@ var __INK_TO_CARD_COMMANDS__ = (function () {
     exportDrawingSample: function (addon, payload) { return native.exportDrawingSample(addon, payload); },
     saveSettings: function (addon, payload) { return native.saveSettings(addon, payload); },
     readMedia: function (addon, payload) { return native.readDrawing(addon, payload); },
+    readPreview: function (addon, payload) { return native.previewDrawing(addon, payload); },
     beginBatch: function (addon, payload) { return __INK_TO_CARD_BATCH__.begin(addon, payload); },
     prepareBatchCard: function (addon, payload) { return __INK_TO_CARD_BATCH__.prepare(addon, payload); },
     applyBatchResult: function (addon, payload) { return __INK_TO_CARD_BATCH__.apply(addon, payload); },

@@ -8,13 +8,14 @@ var __INK_TO_CARD_CONFIG__ = (function () {
     { id: "blue", label: "蓝色", hex: "#4b80dc" },
     { id: "purple", label: "紫色", hex: "#a669cd" }
   ];
+  var mappingEntries = colors.concat([{ id: "uncolored", label: "无彩色书写", hex: "#858c98" }]);
   function bounded(value, fallback, min, max) {
     return typeof value === "number" && isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
   }
   function normalize(value) {
     var input = value || {};
     var mapping = {};
-    colors.forEach(function (color) {
+    mappingEntries.forEach(function (color) {
       var index = input.mapping && input.mapping[color.id];
       mapping[color.id] = typeof index === "number" && index % 1 === 0 && index >= 0 && index <= 15 ? index : -1;
     });
@@ -29,5 +30,5 @@ var __INK_TO_CARD_CONFIG__ = (function () {
       policy: input.policy === "red" ? "red" : input.policy === "priority" ? "priority" : "dominant"
     };
   }
-  return { colors: colors, normalize: normalize };
+  return { colors: colors, mappingEntries: mappingEntries, normalize: normalize };
 })();

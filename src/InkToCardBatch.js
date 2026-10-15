@@ -41,7 +41,7 @@ var __INK_TO_CARD_BATCH__ = (function () {
     }
     if (!ids.length) throw new Error(payload.scope === "selected" ? "请先在脑图中选中要处理的卡片" : "学习集中没有可处理的卡片");
     var options = native.settings(topic);
-    if (options.policy === "red" ? options.mapping.red < 0 : !Object.keys(options.mapping).some(function (key) { return options.mapping[key] >= 0; })) {
+    if (options.mapping.uncolored < 0 && (options.policy === "red" ? options.mapping.red < 0 : !Object.keys(options.mapping).some(function (key) { return options.mapping[key] >= 0; }))) {
       throw new Error(options.policy === "red" ? "请先设置红色对应的卡片色号" : "请先设置笔迹颜色映射");
     }
     var job = { id: "batch-" + Date.now() + "-" + (++serial), topic: topic, ids: ids,

@@ -214,7 +214,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     var note = requireNote(addon, payload.noteId);
     return mediaForNote(note, payload);
   }
-  function mediaForNote(note, payload) {
+  function mediaForNote(note, payload, previewOnly) {
     var candidate = sources(note).find(function (source) { return source.index === payload.index && source.hash === payload.hash; });
     if (!candidate) throw new Error("手写批注已变化，请重新读取");
     var db = database();
@@ -225,7 +225,8 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     if (candidate.kind === "drawing") {
       var raw = value(data, "base64Encoding");
       if (typeof raw === "string" && raw.indexOf("d3Jk") === 0) {
-        var rendered = __INK_TO_CARD_DRAWING__.media(raw, Number(value(data, "length")));
+        var reader = previewOnly === true ? __INK_TO_CARD_DRAWING__.preview : __INK_TO_CARD_DRAWING__.media;
+        var rendered = reader(raw, Number(value(data, "length")));
         return Object.assign(rendered, { hash: candidate.hash, index: candidate.index });
       }
     }
@@ -242,16 +243,17 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     if (!encoded || String(encoded).length > 24 * 1024 * 1024) throw new Error("图片编码失败或过大");
     return { dataURL: "data:image/png;base64," + encoded, hash: candidate.hash, index: candidate.index };
   }
-  function drawingMedia(note, payload) {
+  function drawingMedia(note, payload, previewOnly) {
     var source = latestDrawing(note);
     if (!source || source.index !== payload.index || source.hash !== payload.hash) throw new Error("最后一条手写绘图已变化，请重新识别");
     if (!source.hash) throw new Error("最后一条绘图的媒体引用格式不支持，已跳过");
-    var media = mediaForNote(note, payload);
+    var media = mediaForNote(note, payload, previewOnly);
     // 自动来源必须经笔画解析确认，不接受 drawing 字段里的普通位图。
     if (!media.drawing) throw new Error("最后一条绘图不是已支持的手写笔画格式，已跳过");
     return media;
   }
   function readDrawing(addon, payload) { return drawingMedia(requireNote(addon, payload.noteId), payload); }
+  function previewDrawing(addon, payload) { return drawingMedia(requireNote(addon, payload.noteId), payload, true); }
   function exportDrawingSample(addon, payload) {
     var note = requireNote(addon, payload.noteId);
     var candidate = sources(note).find(function (source) { return source.index === payload.index && source.hash === payload.hash && source.kind === "drawing"; });
@@ -313,8 +315,17 @@ var __INK_TO_CARD_NATIVE__ = (function () {
       total += count;
     });
     if (Math.abs(total - histogram.colored) > 0.01 || total > histogram.pixels + 0.01) throw new Error("识别结果无效");
+    if (histogram.visible !== undefined && (typeof histogram.visible !== "number" || !isFinite(histogram.visible)
+      || histogram.visible < 0 || histogram.visible < histogram.colored - 0.01 || histogram.visible > histogram.pixels + 0.01)) throw new Error("识别结果无效");
     var result = InkToCardCore.choose(histogram, options);
     if (result.status !== "matched") return result;
+    // 写入必须再次通过严格解析；只读预览不能成为任何笔色的写入凭据。
+    var drawing = drawingMedia(note, source).drawing;
+    if (result.color === "uncolored") {
+      // 原生重新解码同一绘图确认确有笔画，读取失败或仅有图片不能当成已书写。
+      if (!drawing || !drawing.strokeCount || !drawing.colors.length) throw new Error("未确认有效手写绘图，保持原色");
+      if (InkToCardCore.drawingHasColor(drawing, options)) return { status: "insufficient", reason: "绘图仍含彩色笔迹，未使用无彩色书写的卡色", counts: histogram.counts };
+    }
     if (Number(note.colorIndex) === result.colorIndex) return Object.assign(result, { status: "unchanged", reason: "卡片已是目标颜色" });
     if (typeof UndoManager === "undefined" || typeof UndoManager.sharedInstance !== "function") throw new Error("当前 MN 没有开放撤销接口，已保留卡片原色");
     var manager = UndoManager.sharedInstance();
@@ -327,7 +338,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
   }
   return { value: value, list: list, current: current, snapshot: snapshot, saveSettings: saveSettings,
     media: media, apply: apply, inspectSources: inspectSources,
-    exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, database: database,
+    exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, previewDrawing: previewDrawing, database: database,
     settings: settings, describeNote: describeNote, latestDrawing: latestDrawing,
     drawingMedia: drawingMedia, applyForNote: applyForNote,
     readNote: readNote, trackNote: trackNote, scopeToken: scopeToken };

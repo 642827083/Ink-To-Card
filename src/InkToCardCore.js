@@ -18,7 +18,7 @@ var InkToCardCore = (function () {
   function empty() {
     var counts = {};
     config.colors.forEach(function (color) { counts[color.id] = 0; });
-    return { counts: counts, pixels: 0, colored: 0 };
+    return { counts: counts, pixels: 0, colored: 0, visible: 0 };
   }
   function histogram(data, width, height, settings) {
     if (!data || data.length !== width * height * 4 || !width || !height) throw new Error("图片像素无效");
@@ -27,6 +27,7 @@ var InkToCardCore = (function () {
     // 透明像素、黑灰白与抗锯齿浅色边缘不参与颜色投票。
     for (var i = 0; i < data.length; i += 4) {
       if (data[i + 3] < 64) continue;
+      result.visible += data[i + 3] / 255;
       var hsv = hue(data[i], data[i + 1], data[i + 2]);
       if (hsv.s < options.saturation || hsv.v < 0.15) continue;
       result.counts[family(hsv.h)] += data[i + 3] / 255;
@@ -38,6 +39,14 @@ var InkToCardCore = (function () {
     var options = config.normalize(settings);
     var entries = config.colors.map(function (color) { return { id: color.id, count: histogram.counts[color.id] || 0 }; });
     var threshold = Math.max(options.minPixels, histogram.pixels * options.minRatio);
+    // 无彩色必须严格为零，不能把少量彩色、未映射或多色冲突当作无彩色。
+    if (options.mapping.uncolored >= 0 && histogram.colored === 0) {
+      if (typeof histogram.visible !== "number" || !isFinite(histogram.visible) || histogram.visible < threshold) {
+        return { status: "insufficient", reason: "未确认足量可见手写，保持原色", counts: histogram.counts };
+      }
+      return { status: "matched", color: "uncolored", colorIndex: options.mapping.uncolored,
+        reason: "已确认无彩色书写", counts: histogram.counts, confidence: 1, pixels: histogram.visible };
+    }
     if (options.policy === "red") {
       var red = histogram.counts.red || 0, target = options.mapping.red;
       if (red < threshold) return { status: "insufficient", reason: "红色笔迹未达到最低量，保持原色", counts: histogram.counts };
@@ -63,5 +72,13 @@ var InkToCardCore = (function () {
       reason: target >= 0 ? "已识别" : "该笔迹颜色尚未设置目标色号", counts: histogram.counts,
       confidence: winner.count / Math.max(histogram.colored, 1), pixels: winner.count };
   }
-  return { hue: hue, family: family, histogram: histogram, choose: choose };
+  function drawingHasColor(drawing, settings) {
+    var options = config.normalize(settings);
+    return drawing.colors.some(function (hex) {
+      var color = hue(parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16));
+      // 原始笔色仍有彩色时不作无彩色判断，避免缩放、遮挡或深色使预览漏掉少量彩色。
+      return color.s >= options.saturation;
+    });
+  }
+  return { hue: hue, family: family, histogram: histogram, choose: choose, drawingHasColor: drawingHasColor };
 })();

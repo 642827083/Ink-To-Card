@@ -64,7 +64,7 @@ var InkToCardApp = (function () {
     element("policy").value = settings.policy;
     element("min-pixels").value = settings.minPixels;
     element("dominance").value = String(settings.dominance);
-    config.colors.forEach(function (color) { element("map-" + color.id).value = settings.mapping[color.id]; });
+    config.mappingEntries.forEach(function (color) { element("map-" + color.id).value = settings.mapping[color.id]; });
     element("settings-status").textContent = "设置已保存到此学习集";
     if (previous && previous.noteId !== snapshot.noteId && snapshot.source) status("已自动选择最后一条手写绘图，可以识别。");
     controls();
@@ -85,7 +85,7 @@ var InkToCardApp = (function () {
     var snapshot = state, settings = config.normalize(snapshot.settings);
     settings.auto = element("auto").checked; settings.policy = element("policy").value;
     settings.minPixels = Number(element("min-pixels").value); settings.dominance = Number(element("dominance").value);
-    config.colors.forEach(function (color) { settings.mapping[color.id] = Number(element("map-" + color.id).value); });
+    config.mappingEntries.forEach(function (color) { settings.mapping[color.id] = Number(element("map-" + color.id).value); });
     try {
       await MNBridge.send("saveSettings", { noteId: snapshot.noteId, topicId: snapshot.topicId, scopeToken: snapshot.scopeToken, settings: settings });
       observation = ""; element("settings-status").textContent = "设置已保存";
@@ -101,12 +101,25 @@ var InkToCardApp = (function () {
   async function preview() {
     if (busy) return;
     busy = true; controls();
+    element("preview").textContent = "生成中…";
+    element("preview-wrap").hidden = true; element("preview-image").removeAttribute("src");
+    element("preview-note").textContent = "";
+    status("正在生成预览…");
     try {
-      var source = selected(), media = await MNBridge.send("readMedia", source);
+      var source = selected(), media = await MNBridge.send("readPreview", source);
+      await loadImage(media.dataURL);
+      var latest = await MNBridge.send("readCurrent"); render(latest);
+      if (!latest.available || latest.noteId !== source.noteId || !latest.source || latest.source.hash !== source.hash || latest.source.index !== source.index) {
+        throw new Error("卡片或绘图已变化，请重新预览");
+      }
       element("preview-image").src = media.dataURL; element("preview-wrap").hidden = false;
-      status("已自动读取最后一条绘图，" + (media.drawing ? media.drawing.strokeCount + " 条笔画，预览为近似渲染。" : ""));
-    } catch (error) { status(error.message, true); }
-    finally { busy = false; controls(); }
+      var note = media.drawing && media.drawing.previewOnly
+        ? "试验预览：请与 MN 中的笔迹核对是否缺笔、连线或保留了已擦除部分。这类绘图暂不参与单卡、自动及批量改色。"
+        : "预览为近似渲染。";
+      element("preview-note").textContent = note;
+      status("预览已生成，" + (media.drawing ? media.drawing.strokeCount + " 条笔画。" : "") + note);
+    } catch (error) { status("预览失败：" + error.message, true); }
+    finally { busy = false; element("preview").textContent = "预览"; controls(); }
   }
   async function inspectSources() {
     if (!state || !state.available || busy || diagnosing || InkToCardStartup.failed()) return;
@@ -164,6 +177,21 @@ var InkToCardApp = (function () {
       image.src = dataURL;
     });
   }
+  function loadImage(dataURL) {
+    return new Promise(function (resolve, reject) {
+      var image = new Image(), finished = false;
+      function finish(error) {
+        if (finished) return;
+        finished = true; clearTimeout(timer);
+        image.onload = null; image.onerror = null;
+        if (error) reject(error); else resolve();
+      }
+      var timer = setTimeout(function () { finish(new Error("预览图片加载超时，请重试")); }, 15000);
+      image.onload = function () { finish(); };
+      image.onerror = function () { finish(new Error("预览图片无法显示")); };
+      image.src = dataURL;
+    });
+  }
   async function recognize(snapshot, automatic, valid) {
     if (busy || saving || !snapshot || !snapshot.source) return false;
     busy = true; controls();
@@ -177,8 +205,8 @@ var InkToCardApp = (function () {
       var result = await MNBridge.send("applyResult", { noteId: snapshot.noteId, index: source.index, hash: source.hash,
         settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, histogram: histogram, scopeToken: snapshot.scopeToken });
       showCounts(result.counts);
-      var color = config.colors.find(function (item) { return item.id === result.color; });
-      status((color ? color.label + "笔迹 · " : "") + result.reason);
+      var color = config.mappingEntries.find(function (item) { return item.id === result.color; });
+      status((color ? color.label + (result.color === "uncolored" ? " · " : "笔迹 · ") : "") + result.reason);
       if (automatic) lastAuto = true;
     } catch (error) { status(error.message, true); }
     finally { busy = false; await refresh(); controls(); }
@@ -261,7 +289,7 @@ var InkToCardApp = (function () {
   function init() {
     if (InkToCardStartup.failed()) return;
     var mapping = element("mapping");
-    config.colors.forEach(function (color) {
+    config.mappingEntries.forEach(function (color) {
       var row = document.createElement("div"); row.className = "mapping-row";
       var name = document.createElement("label"); name.className = "color-name"; name.htmlFor = "map-" + color.id;
       var dot = document.createElement("i"); dot.className = "dot"; dot.style.backgroundColor = color.hex;
