@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src inktocard:; connect-src 'none'">
+  <title>Ink To Card</title>
+  <script src="src/startup.js"></script>
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <main>
+    <header><div class="eyebrow">笔迹 · 颜色 · 卡片</div><h1>让笔色成为标记</h1><p>自动读取最后一条手写绘图，映射卡片颜色。</p></header>
+    <section class="card context"><div class="row"><span class="caption">当前卡片</span><button id="refresh" class="text-button" type="button">刷新</button></div><strong id="note-title">正在读取…</strong><span id="note-color" class="caption"></span><p class="footnote">单卡识别请在脑图中选中卡片；仅进入卡片编辑页可能无法读取。</p></section>
+    <section class="card"><div class="row"><h2>手写来源</h2><span id="source-badge" class="badge">自动选择</span></div><p class="hint">按批注排列顺序，自动选择最后一条手写绘图。普通图片不参与识别；不支持的绘图格式会跳过。</p><div class="row"><span id="source" class="caption">正在读取绘图…</span><button id="preview" class="secondary" type="button">预览</button></div><div id="preview-wrap" hidden><img id="preview-image" alt="自动选择的手写绘图"></div><button id="recognize" class="primary" type="button" disabled>识别并设置卡片颜色</button><div id="status" role="status" aria-live="polite">自动查找最后一条手写绘图。</div><div id="counts" class="counts" hidden></div><button id="inspect-sources" class="text-button" type="button" disabled>检查手写来源</button><button id="export-sample" class="text-button" type="button" disabled>导出绘图样本</button><p class="footnote">样本包含最后一条绘图的原始数据，用于排查解码格式。</p><div id="source-diagnostic" hidden><p id="source-summary" class="hint"></p><details><summary>接口返回详情</summary><pre id="source-details"></pre></details></div></section>
+    <section class="card"><div class="row"><h2>批量处理</h2><button id="batch-cancel" class="text-button" type="button" hidden>取消剩余处理</button></div><p class="hint">每张卡独立读取最后一条手写绘图，使用当前学习集的颜色映射。</p><div class="row"><button id="batch-selected" class="secondary" type="button" disabled>处理选中卡片</button><button id="batch-notebook" class="secondary" type="button" disabled>处理当前学习集</button></div><p id="batch-status" class="hint" role="status" aria-live="polite">无手写或无法识别的卡片会跳过。已改色卡片可以逐张撤销。</p><details><summary>跳过详情（最多显示 50 条）</summary><pre id="batch-details"></pre></details></section>
+    <section class="card"><label class="row switch-row" for="auto"><div><h2>自动跟随笔色</h2><p class="hint">自动跟踪当前卡片的最后一条手写绘图，需在脑图中选中卡片。</p></div><input id="auto" type="checkbox" role="switch"></label><p class="footnote">批注保存且内容稳定后识别。关闭面板后继续跟踪；离开学习集或 MN 退到后台时暂停。</p></section>
+    <details class="card" open><summary>笔迹颜色 → 卡片色号</summary><p class="hint">色号对应你当前学习集的色板。先把任意卡片设为目标颜色，再点“取当前卡色”；也可直接选色号。</p><div id="mapping"></div><span id="settings-status" class="caption" role="status">尚未启用颜色映射。</span></details>
+    <details class="card" open><summary>识别规则</summary><label class="field">颜色模式<select id="policy"><option value="dominant">主要颜色（接近时跳过）</option><option value="priority">优先级：红 → 橙 → 黄 → 绿 → 青 → 蓝 → 紫</option><option value="red">有红色就设为红色</option></select></label><label class="field">最低笔迹像素<input id="min-pixels" type="number" min="5" max="10000" step="1" value="30"></label><label class="field">主要颜色占比<select id="dominance"><option value="0.6">60%</option><option value="0.75">75%</option><option value="0.9">90%</option></select></label><p class="footnote">红色模式：红色达到最低笔迹量，就设为红色对应的卡片色号，不要求占多数；没有足量红色则保持原色。请先配置红色映射。忽略黑、灰、白和透明背景，绘图近似渲染至最长边 1024 像素后计算。</p></details>
+    <footer>Ink To Card · MN4 · 1.0.0</footer>
+  </main>
+  <script src="InkToCardConfig.js"></script>
+  <script src="InkToCardCore.js"></script>
+  <script src="src/lib/mnBridge.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
