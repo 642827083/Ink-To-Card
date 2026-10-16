@@ -32,7 +32,7 @@ if (restored.length !== entries.length) throw new Error('包文件数量不一�
 for (const entry of entries) {
   if (!restored.find(other=>other.name===entry.name)?.data.equals(entry.data)) throw new Error('包内容不一致：'+entry.name);
 }
-for (const required of ['main.js','mnaddon.json','icon.png','InkToCardConfig.js','InkToCardCore.js','InkToCardDrawing.js','InkToCardBatch.js','InkToCardAddon.js','InkToCardPanel.js','web/index.html','web/InkToCardConfig.js','web/InkToCardCore.js','web/src/startup.js','web/src/app.js','web/src/lib/mnBridge.js']) {
+for (const required of ['main.js','mnaddon.json','icon.png','InkToCardConfig.js','InkToCardCore.js','InkToCardDrawing.js','InkToCardBatch.js','InkToCardAddon.js','InkToCardPanel.js','InkToCardToolbar.js','web/index.html','web/InkToCardConfig.js','web/InkToCardCore.js','web/src/startup.js','web/src/app.js','web/src/lib/mnBridge.js']) {
   if (!restored.some(entry=>entry.name===required)) throw new Error('包缺少 '+required);
 }
 fs.writeFileSync(output, archive, {flag:release?'wx':'w'});

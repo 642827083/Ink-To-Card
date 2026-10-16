@@ -9,16 +9,55 @@
   <link rel="stylesheet" href="src/styles.css">
 </head>
 <body>
-  <main>
-    <header><div class="eyebrow">笔迹 · 颜色 · 卡片</div><h1>让笔色成为标记</h1><p>自动读取最后一条手写绘图，映射卡片颜色。</p></header>
-    <section class="card context"><div class="row"><span class="caption">当前跟踪卡片</span><button id="refresh" class="text-button" type="button">刷新</button></div><strong id="note-title">正在读取…</strong><span id="note-color" class="caption"></span><p class="footnote">先在脑图中选一张卡片，取消选中后继续跟踪；单选其他卡片时切换目标。</p></section>
-    <section class="card"><div class="row"><h2>手写来源</h2><span id="source-badge" class="badge">自动选择</span></div><p class="hint">按批注排列顺序，自动选择最后一条手写绘图。普通图片不参与识别；不支持的绘图格式会跳过。</p><div class="row"><span id="source" class="caption">正在读取绘图…</span><button id="preview" class="secondary" type="button">预览</button></div><div id="preview-wrap" hidden><img id="preview-image" alt="自动选择的手写绘图"><p id="preview-note" class="footnote" role="status"></p></div><button id="recognize" class="primary" type="button" disabled>识别并设置卡片颜色</button><div id="status" role="status" aria-live="polite">自动查找最后一条手写绘图。</div><div id="counts" class="counts" hidden></div><button id="inspect-sources" class="text-button" type="button" disabled>检查手写来源</button><button id="export-sample" class="text-button" type="button" disabled>导出绘图样本</button><p class="footnote">样本包含最后一条绘图的原始数据，用于排查解码格式。</p><div id="source-diagnostic" hidden><p id="source-summary" class="hint"></p><details><summary>接口返回详情</summary><pre id="source-details"></pre></details></div></section>
-    <section class="card"><div class="row"><h2>批量处理</h2><button id="batch-cancel" class="text-button" type="button" hidden>取消剩余处理</button></div><p class="hint">每张卡独立读取最后一条手写绘图，使用当前学习集的颜色映射。</p><div class="row"><button id="batch-selected" class="secondary" type="button" disabled>处理选中卡片</button><button id="batch-notebook" class="secondary" type="button" disabled>处理当前学习集</button></div><p id="batch-status" class="hint" role="status" aria-live="polite">无手写或无法识别的卡片会跳过。已改色卡片可以逐张撤销。</p><details><summary>跳过详情（最多显示 50 条）</summary><pre id="batch-details"></pre></details></section>
-    <section class="card"><label class="row switch-row" for="auto"><div><h2>自动跟随笔色</h2><p class="hint">跟踪已选定卡片的最后一条手写绘图，无需持续保持选中。</p></div><input id="auto" type="checkbox" role="switch"></label><p class="footnote">约每 0.3 秒检查，笔迹保存且稳定至少 0.3 秒后识别。收起面板后继续跟踪；离开学习集或 MN 进入后台时暂停。</p></section>
-    <details class="card" open><summary>笔迹颜色 → 卡片色号</summary><p class="hint">色号对应你当前学习集的色板。先把任意卡片设为目标颜色，再点“取当前卡色”；也可直接选色号。</p><div id="mapping"></div><p class="footnote">“无彩色书写”：最后一条绘图有足量可见手写、且未检测到彩色时，设为对应卡色；黑、灰、白书写均适用。默认“不触发”，选定色号即启用。没有手写或读取失败时保持原色。</p><span id="settings-status" class="caption" role="status">尚未启用颜色映射。</span></details>
-    <details class="card" open><summary>识别规则</summary><label class="field">颜色模式<select id="policy"><option value="dominant">主要颜色（接近时跳过）</option><option value="priority">优先级：红 → 橙 → 黄 → 绿 → 青 → 蓝 → 紫</option><option value="red">有红色就设为红色</option></select></label><label class="field">最低笔迹像素<input id="min-pixels" type="number" min="5" max="10000" step="1" value="30"></label><label class="field">主要颜色占比<select id="dominance"><option value="0.6">60%</option><option value="0.75">75%</option><option value="0.9">90%</option></select></label><p class="footnote">红色模式：红色达到最低笔迹量，就设为红色对应的卡片色号，不要求占多数；没有足量红色则保持原色。请先配置红色映射。彩色判断忽略黑、灰、白和透明背景；“无彩色书写”单独按映射判断。绘图近似渲染至最长边 1024 像素后计算。</p></details>
-    <footer>Ink To Card · MN4 经典版 · 乔木Joe · 1.0.2</footer>
+  <main id="panel-content">
+    <section class="card context" aria-label="当前卡片与自动跟随">
+      <div class="row"><span class="caption">当前跟踪卡片</span><button id="refresh" class="text-button" type="button">刷新</button></div>
+      <div class="row note-heading"><strong id="note-title">正在读取…</strong><span id="note-color" class="caption"></span></div>
+      <label class="tracking-row" for="auto"><span class="tracking-copy"><span class="tracking-title">自动跟随笔色</span><span id="tracking-status" class="tracking-status" role="status">正在连接</span></span><span class="switch-control"><input id="auto" type="checkbox" role="switch" aria-label="自动跟随笔色" aria-describedby="tracking-status" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
+      <div id="status" role="status" aria-live="polite">正在连接 MarginNote…</div>
+    </section>
+    <section class="card source-card" aria-label="手写来源与识别">
+      <div class="row"><span id="source" class="caption">正在读取绘图…</span><button id="preview" class="secondary" type="button" aria-expanded="false" aria-controls="preview-wrap">预览</button></div>
+      <div id="preview-wrap" hidden><button id="preview-zoom" class="preview-button" type="button" aria-label="放大手写预览"><img id="preview-image" alt="自动选择的手写绘图"><span>点击放大</span></button><p id="preview-note" class="footnote"></p></div>
+      <button id="recognize" class="primary" type="button" disabled>立即识别并改色</button>
+    </section>
+    <details id="batch-section" class="card disclosure">
+      <summary>批量处理</summary><p class="hint">每张卡独立读取最后一条手写绘图，使用当前学习集的颜色映射。</p>
+      <div class="row batch-actions"><button id="batch-selected" class="secondary" type="button" disabled>处理选中卡片</button><button id="batch-notebook" class="secondary" type="button" disabled>处理当前学习集</button></div>
+      <p id="batch-status" class="hint" role="status" aria-live="polite">无手写或无法识别的卡片会跳过。已改色卡片可以逐张撤销。</p>
+      <button id="batch-cancel" class="text-button" type="button" hidden>取消剩余处理</button>
+      <details><summary>跳过详情（最多显示 50 条）</summary><pre id="batch-details"></pre></details>
+    </details>
+    <details id="mapping-section" class="card disclosure">
+      <summary>颜色映射<span id="mapping-summary" class="summary-meta">尚未启用颜色映射</span></summary>
+      <p class="hint">笔迹颜色 → 卡片色号。对应当前学习集色板，可直接选色号，或先选一张目标颜色的卡片，再点“取当前卡色”。</p>
+      <div id="mapping"></div>
+      <p class="footnote">“无彩色书写”：最后一条绘图有足量可见手写、且未检测到彩色时，设为对应卡色；黑、灰、白书写均适用。默认“不触发”，选定色号即启用。没有手写或读取失败时保持原色。</p>
+      <span id="settings-status" class="caption" role="status">尚未启用颜色映射。</span>
+    </details>
+    <details id="rules-section" class="card disclosure">
+      <summary>识别规则<span id="rules-summary" class="summary-meta">主要颜色</span></summary>
+      <label class="field">颜色模式<select id="policy"><option value="dominant">主要颜色（接近时跳过）</option><option value="priority">优先级：红 → 橙 → 黄 → 绿 → 青 → 蓝 → 紫</option><option value="red">有红色就设为红色</option></select></label>
+      <label class="field">最低笔迹像素<input id="min-pixels" type="number" min="5" max="10000" step="1" value="30"></label>
+      <label class="field">主要颜色占比<select id="dominance"><option value="0.6">60%</option><option value="0.75">75%</option><option value="0.9">90%</option></select></label>
+      <p class="footnote">红色模式：红色达到最低笔迹量，就设为红色对应的卡片色号，不要求占多数；没有足量红色则保持原色。请先配置红色映射。彩色判断忽略黑、灰、白和透明背景；“无彩色书写”单独按映射判断。绘图近似渲染至最长边 1024 像素后计算。</p>
+    </details>
+    <details id="diagnostics-section" class="card disclosure">
+      <summary>问题排查与使用说明</summary>
+      <p class="hint">单击插件图标打开或收起面板；双击切换自动跟随，并收起面板。自动跟随开启时图标保持高亮。</p>
+      <div class="row diagnostic-source"><h2>手写来源</h2><span id="source-badge" class="badge">自动选择</span></div><div id="counts" class="counts" hidden></div>
+      <p class="hint">先在脑图中选一张卡片，取消选中后继续跟踪；单选其他卡片时切换目标。</p>
+      <p class="hint">自动选择批注顺序中的最后一条手写绘图。普通图片不参与识别，不支持的绘图格式会跳过。</p>
+      <p class="hint">自动跟随约每 0.3 秒检查，笔迹保存且稳定至少 0.3 秒后识别。收起面板后继续跟踪；离开学习集或 MN 进入后台时暂停。</p>
+      <div class="row diagnostic-actions"><button id="inspect-sources" class="text-button" type="button" disabled>检查手写来源</button><button id="export-sample" class="text-button" type="button" disabled>导出绘图样本</button></div>
+      <p class="footnote">样本包含最后一条绘图的原始数据，用于排查解码格式。</p>
+      <div id="source-diagnostic" hidden><p id="source-summary" class="hint"></p><details><summary>接口返回详情</summary><pre id="source-details"></pre></details></div>
+    </details>
+    <footer>Ink To Card · MN4 经典版 · 乔木Joe · 1.0.3</footer>
   </main>
+  <div id="preview-dialog" class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-dialog-title" hidden>
+    <div class="preview-sheet"><div class="row"><h2 id="preview-dialog-title">手写预览</h2><button id="preview-close" class="secondary" type="button">关闭</button></div><div class="preview-large"><img id="preview-large-image" alt="放大的手写绘图"></div><p id="preview-large-note" class="footnote"></p></div>
+  </div>
   <script src="InkToCardConfig.js"></script>
   <script src="InkToCardCore.js"></script>
   <script src="src/lib/mnBridge.js"></script>

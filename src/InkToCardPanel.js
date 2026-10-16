@@ -97,5 +97,18 @@ var __INK_TO_CARD_PANEL__ = (function () {
     clamp(controller);
     return true;
   }
-  return { create: create, attach: attach, layout: clamp, evaluate: evaluate };
+  function toggle(addon) {
+    var panel = addon.inkPanel;
+    if (!panel || !attach(panel)) {
+      Application.sharedInstance().showHUD("请先打开一个学习集", addon.window, 2); return;
+    }
+    panel.view.hidden = !panel.view.hidden;
+    if (!panel.view.hidden) {
+      panel.view.superview.bringSubviewToFront(panel.view);
+      evaluate(panel, "window.InkToCardApp&&window.InkToCardApp.refresh()");
+    }
+    var study = Application.sharedInstance().studyController(addon.window);
+    if (study && typeof study.refreshAddonCommands === "function") study.refreshAddonCommands();
+  }
+  return { create: create, attach: attach, layout: clamp, evaluate: evaluate, toggle: toggle };
 })();

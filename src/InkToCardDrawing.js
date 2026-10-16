@@ -82,11 +82,6 @@ var __INK_TO_CARD_DRAWING__ = (function () {
   function points(bytes, transform, budget) {
     var records = fields(bytes); known(records, { 1: 2, 2: 1, 3: 0, 4: 0, 5: 0, 6: 2, 7: 2, 9: 0 });
     var marker = one(records, 9, 0, true);
-    if (marker > 0) {
-      if (!budget.previewOnly) fail("笔画路径含未验证标记；请点击预览核对，暂不支持改色");
-      // 字段语义未确认，仅在只读预览中记录它，不据此删减、重排或裁剪笔画。
-      budget.pathMarkers.push({ strokeIndex: budget.strokeIndex, value: marker });
-    }
     var count = one(records, 3, 0), flags = one(records, 4, 0), raw = one(records, 7, 2), common = one(records, 6, 2);
     budget.count += count;
     if (count < 1 || budget.count > MAX_POINTS || raw.length % count) fail("笔画点数或长度无效");
@@ -95,6 +90,16 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     var layouts = { 3: [12, 22], 67: [14, 20], 39: [18, 16], 103: [20, 14], 167: [20, 14], 231: [22, 12] };
     var layout = layouts[flags];
     if (!layout || stride !== layout[0] || common.length !== layout[1]) fail("笔画通道布局变化");
+    if (marker > 0) {
+      // MN4.5/62 的 94 笔样本已由用户对照原图确认；仅放行这些布局和样本覆盖的数值范围。
+      // 字段完整语义仍未知，只保留标记，不据此删减、裁剪或重排控制点。
+      var compatible = [39, 103, 167, 231].indexOf(flags) >= 0 && marker < count;
+      if (!compatible) {
+        if (!budget.previewOnly) fail("笔画路径含未验证标记；请点击预览核对，暂不支持改色");
+        budget.unverifiedPathMarkers = true;
+      }
+      budget.pathMarkers.push({ strokeIndex: budget.strokeIndex, value: marker });
+    }
     var view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
     var commonWidth = stride < 16 ? new DataView(common.buffer, common.byteOffset, common.byteLength).getFloat32(0, true) : 0;
     var scale = Math.sqrt(Math.abs(transform[0] * transform[3] - transform[1] * transform[2])), result = [];
@@ -115,7 +120,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     if (one(records, 1, 0, true) > 0 || one(records, 30, 0, true) > 0) fail("绘图版本变化");
     var inks = records.filter(function (record) { return record.number === 4; });
     var strokes = records.filter(function (record) { return record.number === 5; });
-    var budget = { count: 0, previewOnly: previewOnly === true, pathMarkers: [], strokeIndex: 0 };
+    var budget = { count: 0, previewOnly: previewOnly === true, pathMarkers: [], unverifiedPathMarkers: false, strokeIndex: 0 };
     if (!inks.length || inks.length > 64 || !strokes.length || strokes.length > MAX_STROKES) fail("笔色或笔画数量超出范围");
     inks = inks.map(function (record) { return ink(record.value); });
     strokes = strokes.map(function (record, strokeIndex) {
@@ -131,7 +136,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       // 额外的遮罩、擦除和其他新字段会在 known 中拒绝，不能默默算入旧笔迹。
       return { color: inks[index].color, alpha: inks[index].alpha, points: path };
     });
-    return { strokes: strokes, pointCount: budget.count, pathMarkers: budget.pathMarkers };
+    return { strokes: strokes, pointCount: budget.count, pathMarkers: budget.pathMarkers, previewOnly: budget.unverifiedPathMarkers };
   }
   function verifiedLine(records, path) {
     var identifier = one(records, 13, 2, true), kind = one(records, 14, 0, true);
@@ -174,9 +179,9 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     if (svg.length > 1500000) fail("预览内容过大");
     var metadata = { format: "PencilKit wrd", strokeCount: drawing.strokes.length, pointCount: drawing.pointCount, colors: colors, approximate: true };
     if (drawing.pathMarkers && drawing.pathMarkers.length) {
-      metadata.previewOnly = true;
       metadata.pathMarkers = drawing.pathMarkers;
     }
+    if (drawing.previewOnly === true) metadata.previewOnly = true;
     return { dataURL: "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg), drawing: metadata };
   }
   function media(encoded, length) { return render(decode(decodeBase64(encoded, length))); }

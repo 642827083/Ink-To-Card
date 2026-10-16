@@ -82,6 +82,19 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     return drawings.length ? drawings[drawings.length - 1] : null;
   }
   function settings(topic) { return config.normalize(read("settings." + topic)); }
+  function toolbarState(addon) {
+    var study = Application.sharedInstance().studyController(addon.window);
+    var notebook = study && study.notebookController, topic = String(value(notebook, "notebookId") || "");
+    return { study: study, topic: topic, enabled: addon.inkNotebookOpen !== false && !!topic && settings(topic).auto };
+  }
+  function followEnabled(addon) { return toolbarState(addon).enabled; }
+  function syncToolbar(addon) {
+    var state = toolbarState(addon), key = JSON.stringify([state.topic, state.enabled]);
+    if (addon.inkToolbarState === key || !state.study || typeof state.study.refreshAddonCommands !== "function") return;
+    // 仅切集或开关状态变化时刷新；普通笔迹轮询不反复刷新工具栏。
+    addon.inkToolbarState = key;
+    state.study.refreshAddonCommands();
+  }
   function describeNote(note) {
     var id = String(note.noteId), topic = String(note.notebookId);
     var source = latestDrawing(note);
@@ -100,6 +113,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
       result.scene = !!addon.inkSceneMode; result.tracking = !!addon.inkClassicTracking;
       result.scopeToken = scopeToken(addon); result.settings = settings(topic);
     }
+    syncToolbar(addon);
     return result;
   }
   function scopeToken(addon) {
@@ -208,7 +222,16 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     } else { topic = String(requireNote(addon, payload.noteId).notebookId); }
     var normalized = config.normalize(payload.settings);
     write("settings." + topic, normalized);
+    syncToolbar(addon);
     return normalized;
+  }
+  function toggleFollow(addon, scope) {
+    if (addon.inkNotebookOpen === false || addon.inkInactive) throw new Error("请先打开一个学习集");
+    requireSceneScope(addon, { scopeToken: scope });
+    var state = toolbarState(addon);
+    if (!state.topic) throw new Error("请先打开一个学习集");
+    var options = settings(state.topic); options.auto = !options.auto;
+    return saveSettings(addon, { topicId: state.topic, scopeToken: scope, settings: options });
   }
   function media(addon, payload) {
     var note = requireNote(addon, payload.noteId);
@@ -341,5 +364,6 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, previewDrawing: previewDrawing, database: database,
     settings: settings, describeNote: describeNote, latestDrawing: latestDrawing,
     drawingMedia: drawingMedia, applyForNote: applyForNote,
-    readNote: readNote, trackNote: trackNote, scopeToken: scopeToken };
+    readNote: readNote, trackNote: trackNote, scopeToken: scopeToken,
+    followEnabled: followEnabled, syncToolbar: syncToolbar, toggleFollow: toggleFollow };
 })();

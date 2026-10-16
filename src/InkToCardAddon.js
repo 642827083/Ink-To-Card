@@ -6,6 +6,7 @@ function createInkToCardAddon(mainPath) {
       addon.inkSceneEpoch = 1;
       addon.inkTargetId = null;
       addon.inkTargetTopic = null;
+      __INK_TO_CARD_TOOLBAR__.cancelClick(addon);
       addon.inkPanel = __INK_TO_CARD_PANEL__.create(addon, mainPath);
       addon.inkTimer = NSTimer.scheduledTimerWithTimeInterval(0.3, true, function () {
         if (!addon.inkPanel || !addon.inkPanel.ready || !addon.inkNotebookOpen || addon.inkInactive) return;
@@ -13,9 +14,10 @@ function createInkToCardAddon(mainPath) {
       });
       console.log("[Ink To Card] 已初始化 MN4 经典插件");
     },
-    sceneWillResignActive: function () { self.inkInactive = true; self.inkBatch = null; self.inkSceneEpoch += 1; },
+    sceneWillResignActive: function () { __INK_TO_CARD_TOOLBAR__.cancelClick(self); self.inkInactive = true; self.inkBatch = null; self.inkSceneEpoch += 1; },
     sceneDidBecomeActive: function () { self.inkInactive = false; },
     sceneDidDisconnect: function () {
+      __INK_TO_CARD_TOOLBAR__.cancelClick(self);
       if (self.inkTimer) self.inkTimer.invalidate();
       self.inkTimer = null;
       if (self.inkPanel) {
@@ -31,37 +33,31 @@ function createInkToCardAddon(mainPath) {
       self.inkSceneEpoch += 1;
     },
     notebookWillOpen: function () {
+      __INK_TO_CARD_TOOLBAR__.cancelClick(self);
       self.inkTargetId = null;
       self.inkTargetTopic = null;
       self.inkSceneEpoch += 1;
       self.inkNotebookOpen = true;
       if (self.inkPanel) __INK_TO_CARD_PANEL__.attach(self.inkPanel);
+      __INK_TO_CARD_NATIVE__.syncToolbar(self);
     },
     notebookWillClose: function () {
+      __INK_TO_CARD_TOOLBAR__.cancelClick(self);
       self.inkTargetId = null;
       self.inkTargetTopic = null;
       self.inkSceneEpoch += 1;
       self.inkNotebookOpen = false;
       self.inkBatch = null;
       if (self.inkPanel) self.inkPanel.view.hidden = true;
+      __INK_TO_CARD_NATIVE__.syncToolbar(self);
     },
     controllerWillLayoutSubviews: function (controller) {
       if (self.inkPanel && controller === Application.sharedInstance().studyController(self.window)) __INK_TO_CARD_PANEL__.layout(self.inkPanel);
     },
     queryAddonCommandStatus: function () {
-      return { image: "icon.png", object: self, selector: "toggleInkToCard:", checked: !!(self.inkPanel && !self.inkPanel.view.hidden) };
+      return { image: "icon.png", object: self, selector: "handleInkToCardToolbar:", checked: __INK_TO_CARD_NATIVE__.followEnabled(self) };
     },
-    toggleInkToCard: function () {
-      if (!self.inkPanel || !__INK_TO_CARD_PANEL__.attach(self.inkPanel)) {
-        Application.sharedInstance().showHUD("请先打开一个学习集", self.window, 2);
-        return;
-      }
-      self.inkPanel.view.hidden = !self.inkPanel.view.hidden;
-      if (!self.inkPanel.view.hidden) {
-        self.inkPanel.view.superview.bringSubviewToFront(self.inkPanel.view);
-        __INK_TO_CARD_PANEL__.evaluate(self.inkPanel, "window.InkToCardApp&&window.InkToCardApp.refresh()");
-      }
-      Application.sharedInstance().studyController(self.window).refreshAddonCommands();
-    }
+    handleInkToCardToolbar: function () { __INK_TO_CARD_TOOLBAR__.click(self); },
+    toggleInkToCard: function () { __INK_TO_CARD_PANEL__.toggle(self); }
   });
 }

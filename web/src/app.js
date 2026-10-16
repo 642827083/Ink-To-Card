@@ -1,26 +1,95 @@
 var InkToCardApp = (function () {
   var config = __INK_TO_CARD_CONFIG__, state = null, rendered = "", busy = false, saving = false, polling = false;
   var observation = "", observedAt = 0, attempted = new Map(), lastAuto = false, diagnosing = false, batch = null;
+  var waitingForInk = false, trackingError = false, resultTarget = null;
+  var previewCache = null, previewLoading = false;
   function element(id) { return document.getElementById(id); }
-  function configurationEnabled(enabled) {
-    ["auto", "policy", "min-pixels", "dominance"].forEach(function (id) { element(id).disabled = !enabled; });
-    document.querySelectorAll(".mapping-row select, .mapping-row button").forEach(function (control) { control.disabled = !enabled; });
+  function controlState(control, available, pending) {
+    control.disabled = !available || !!pending;
+    control.setAttribute("aria-busy", String(!!available && !!pending));
+  }
+  function configurationEnabled(available, pending) {
+    ["auto", "policy", "min-pixels", "dominance"].forEach(function (id) { controlState(element(id), available, pending); });
+    document.querySelectorAll(".mapping-row select, .mapping-row button").forEach(function (control) { controlState(control, available, pending); });
   }
   function controls() {
     var available = !!(state && state.available), idle = !busy && !saving;
     var configurable = !!(state && (available || state.tracking && state.topicId));
-    configurationEnabled(configurable && idle);
-    element("dominance").disabled = !configurable || !idle || state.settings.policy !== "dominant";
-    element("preview").disabled = !available || !state.source || !idle;
-    element("recognize").disabled = !available || !state.source || !idle;
-    element("inspect-sources").disabled = !available || !idle || diagnosing;
-    element("export-sample").disabled = !available || !state.source || !idle;
-    element("batch-selected").disabled = !(state && state.topicId) || !idle;
-    element("batch-notebook").disabled = !(state && state.topicId) || !idle;
+    configurationEnabled(configurable, !idle);
+    controlState(element("dominance"), configurable && state.settings.policy === "dominant", !idle);
+    controlState(element("preview"), available && state.source, !idle);
+    controlState(element("recognize"), available && state.source, !idle);
+    controlState(element("inspect-sources"), available, !idle || diagnosing);
+    controlState(element("export-sample"), available && state.source, !idle);
+    controlState(element("batch-selected"), state && state.topicId, !idle);
+    controlState(element("batch-notebook"), state && state.topicId, !idle);
     element("batch-cancel").hidden = !batch;
     element("batch-cancel").disabled = !!(batch && batch.cancelled);
+    previewButton();
+    trackingStatus();
   }
-  function status(message, error) { element("status").textContent = message; element("status").className = error ? "error" : ""; }
+  function status(message, error, success) { element("status").textContent = message; element("status").className = error ? "error" : success ? "success" : ""; }
+  function hasMapping(settings) {
+    return config.mappingEntries.some(function (color) { return settings.mapping[color.id] >= 0; });
+  }
+  function trackingStatus() {
+    var badge = element("tracking-status"), label = "正在连接", tone = "";
+    if (state) {
+      if (!state.available) label = state.topicId ? "等待选卡" : "等待学习集";
+      else if (saving) label = "保存设置中";
+      else if (busy) label = batch ? "批量处理中" : "处理中";
+      else if (!state.settings.auto) label = "自动已关闭";
+      else if (!state.source) label = "等待手写";
+      else if (!hasMapping(state.settings)) label = "待配置映射";
+      else if (trackingError) { label = "识别受阻"; tone = " blocked"; }
+      else if (waitingForInk) { label = "等待笔迹稳定"; tone = " waiting"; }
+      else { label = "跟踪中"; tone = " active"; }
+    }
+    badge.textContent = label; badge.className = "tracking-status" + tone;
+  }
+  function readyStatus(snapshot) {
+    if (!snapshot.available) { status(snapshot.reason || "请先在脑图中选一张卡片。"); return; }
+    if (!snapshot.source) { status("没有可读取的手写绘图，普通图片不参与自动识别。"); return; }
+    if (!hasMapping(snapshot.settings)) { status("请展开“颜色映射”，设置笔迹对应的卡片色号。"); return; }
+    status(snapshot.settings.auto ? "等待笔迹变化，保存后自动识别。" : "已就绪，点击“立即识别并改色”。");
+  }
+  function settingsSummary(settings) {
+    var mappings = config.mappingEntries.filter(function (color) { return settings.mapping[color.id] >= 0; });
+    element("mapping-summary").textContent = mappings.length ? mappings.map(function (color) {
+      return color.label + " → " + (settings.mapping[color.id] + 1);
+    }).join("；") : "尚未启用颜色映射";
+    element("rules-summary").textContent = settings.policy === "red" ? "有红色就设为红色" : settings.policy === "priority" ? "按颜色优先级" : "主要颜色 · 占比 " + Math.round(settings.dominance * 100) + "%";
+  }
+  function closePreview(restoreFocus) {
+    var opened = !element("preview-dialog").hidden;
+    element("preview-dialog").hidden = true;
+    element("preview-large-image").removeAttribute("src");
+    element("panel-content").removeAttribute("aria-hidden");
+    document.body.className = "";
+    if (opened && restoreFocus && typeof element("preview-zoom").focus === "function") element("preview-zoom").focus();
+  }
+  function zoomPreview() {
+    if (element("preview-wrap").hidden) return;
+    element("preview-large-image").src = element("preview-image").src;
+    element("preview-large-note").textContent = element("preview-note").textContent;
+    element("preview-dialog").hidden = false;
+    element("panel-content").setAttribute("aria-hidden", "true");
+    document.body.className = "preview-open";
+    element("preview-close").focus();
+  }
+  function previewButton() {
+    var opened = !element("preview-wrap").hidden;
+    element("preview").textContent = previewLoading ? "生成中…" : opened ? "收起" : "预览";
+    element("preview").setAttribute("aria-expanded", String(opened));
+  }
+  function previewOpen(opened) {
+    if (!opened) closePreview(false);
+    element("preview-wrap").hidden = !opened;
+    previewButton();
+  }
+  function previewKey(source, scopeToken) {
+    return JSON.stringify([scopeToken, source.noteId, source.index, source.hash]);
+  }
   function showCounts(counts) {
     var box = element("counts"); box.replaceChildren(); box.hidden = !counts;
     if (!counts) return;
@@ -40,24 +109,30 @@ var InkToCardApp = (function () {
     if (signature === rendered) { controls(); return; }
     var previous = rendered ? JSON.parse(rendered) : null;
     rendered = signature;
+    var changedCard = !previous || previous.noteId !== snapshot.noteId || previous.topicId !== snapshot.topicId || previous.scopeToken !== snapshot.scopeToken;
+    var changedSource = changedCard || JSON.stringify(previous.source) !== JSON.stringify(snapshot.source);
+    var changedSettings = !previous || JSON.stringify(previous.settings) !== JSON.stringify(snapshot.settings);
+    if (changedSource || changedSettings) { waitingForInk = false; trackingError = false; resultTarget = null; }
     var available = snapshot.available;
     element("note-title").textContent = available ? snapshot.title : snapshot.reason;
     element("note-color").textContent = available ? "当前色号 " + (snapshot.colorIndex + 1) : "";
-    ["preview", "auto", "policy", "min-pixels", "dominance"].forEach(function (id) { element(id).disabled = !available; });
     controls();
-    element("inspect-sources").disabled = !available || diagnosing;
-    element("export-sample").disabled = !available || busy || !(snapshot.sources || []).some(function (source) { return source.kind === "drawing"; });
-    if (!previous || previous.noteId !== snapshot.noteId) element("source-diagnostic").hidden = true;
-    element("source").textContent = snapshot.source ? "绘图批注 " + (snapshot.source.index + 1) + " · 最后一条" : "未找到手写绘图";
-    if (!previous || previous.noteId !== snapshot.noteId || JSON.stringify(previous.sources) !== JSON.stringify(snapshot.sources)) {
-      element("preview-wrap").hidden = true; element("preview-image").removeAttribute("src");
+    if (changedSource) element("source-diagnostic").hidden = true;
+    element("source").textContent = snapshot.source ? "最后一条手写绘图 · 批注 " + (snapshot.source.index + 1) : "未找到手写绘图";
+    if (changedSource) {
+      previewCache = null; previewOpen(false);
+      element("preview-image").removeAttribute("src"); element("preview-note").textContent = "";
       showCounts(null);
     }
+    if (changedSettings) showCounts(null);
     var badge = element("source-badge");
     badge.textContent = snapshot.source ? "自动选择" : "无绘图";
     badge.className = "badge" + (snapshot.source ? " bound" : "");
-    element("recognize").disabled = !snapshot.source || busy;
-    if (!snapshot.source) status("没有可读取的手写绘图，普通图片不参与自动识别。");
+    if (changedSource || changedSettings || resultTarget !== null && snapshot.colorIndex !== resultTarget) {
+      resultTarget = null; readyStatus(snapshot);
+    }
+    settingsSummary(config.normalize(snapshot.settings));
+    element("auto").checked = !!(snapshot.settings && snapshot.settings.auto);
     if (!available && !(snapshot.tracking && snapshot.topicId)) { controls(); return; }
     var settings = snapshot.settings;
     element("auto").checked = settings.auto;
@@ -66,7 +141,6 @@ var InkToCardApp = (function () {
     element("dominance").value = String(settings.dominance);
     config.mappingEntries.forEach(function (color) { element("map-" + color.id).value = settings.mapping[color.id]; });
     element("settings-status").textContent = "设置已保存到此学习集";
-    if (previous && previous.noteId !== snapshot.noteId && snapshot.source) status("已自动选择最后一条手写绘图，可以识别。");
     controls();
   }
   async function refresh() {
@@ -81,7 +155,7 @@ var InkToCardApp = (function () {
   async function save() {
     if (!state || !(state.available || state.tracking && state.topicId) || saving || busy) return;
     saving = true;
-    configurationEnabled(false);
+    controls();
     var snapshot = state, settings = config.normalize(snapshot.settings);
     settings.auto = element("auto").checked; settings.policy = element("policy").value;
     settings.minPixels = Number(element("min-pixels").value); settings.dominance = Number(element("dominance").value);
@@ -99,31 +173,35 @@ var InkToCardApp = (function () {
     return { noteId: state.noteId, index: source.index, hash: source.hash };
   }
   async function preview() {
-    if (busy) return;
-    busy = true; controls();
-    element("preview").textContent = "生成中…";
-    element("preview-wrap").hidden = true; element("preview-image").removeAttribute("src");
-    element("preview-note").textContent = "";
-    status("正在生成预览…");
+    if (busy || saving) return;
+    if (!element("preview-wrap").hidden) { previewOpen(false); status("预览已收起。"); return; }
+    busy = true; previewLoading = true; controls();
     try {
-      var source = selected(), media = await MNBridge.send("readPreview", source);
+      // 重开前核对当前媒体引用，复用未变化的图片；不重新读取或解码媒体。
+      render(await MNBridge.send("readCurrent"));
+      var source = selected(), scope = state.scopeToken, key = previewKey(source, scope);
+      if (previewCache === key) { previewOpen(true); status("预览已展开，点击图片可放大。"); return; }
+      previewCache = null; element("preview-image").removeAttribute("src");
+      element("preview-note").textContent = "";
+      status("正在生成预览…");
+      var media = await MNBridge.send("readPreview", source);
       await loadImage(media.dataURL);
       var latest = await MNBridge.send("readCurrent"); render(latest);
-      if (!latest.available || latest.noteId !== source.noteId || !latest.source || latest.source.hash !== source.hash || latest.source.index !== source.index) {
+      if (!latest.available || latest.scopeToken !== scope || latest.noteId !== source.noteId || !latest.source || latest.source.hash !== source.hash || latest.source.index !== source.index) {
         throw new Error("卡片或绘图已变化，请重新预览");
       }
-      element("preview-image").src = media.dataURL; element("preview-wrap").hidden = false;
+      previewCache = key; element("preview-image").src = media.dataURL; previewOpen(true);
       var note = media.drawing && media.drawing.previewOnly
         ? "试验预览：请与 MN 中的笔迹核对是否缺笔、连线或保留了已擦除部分。这类绘图暂不参与单卡、自动及批量改色。"
         : "预览为近似渲染。";
       element("preview-note").textContent = note;
-      status("预览已生成，" + (media.drawing ? media.drawing.strokeCount + " 条笔画。" : "") + note);
+      status("预览已生成" + (media.drawing ? "，" + media.drawing.strokeCount + " 条笔画" : "") + "。点击图片可放大。");
     } catch (error) { status("预览失败：" + error.message, true); }
-    finally { busy = false; element("preview").textContent = "预览"; controls(); }
+    finally { busy = false; previewLoading = false; controls(); }
   }
   async function inspectSources() {
     if (!state || !state.available || busy || diagnosing || InkToCardStartup.failed()) return;
-    diagnosing = true; element("inspect-sources").disabled = true;
+    diagnosing = true; controls();
     var noteId = state.noteId;
     function number(probe) { return probe.error ? "读取失败：" + probe.error : probe.supported ? String(probe.value) : "接口不可用"; }
     function line(label, data) {
@@ -144,11 +222,11 @@ var InkToCardApp = (function () {
       element("source-details").textContent = JSON.stringify(report, null, 2);
       element("source-diagnostic").hidden = false;
     } catch (error) { status(error.message, true); }
-    finally { diagnosing = false; element("inspect-sources").disabled = !(state && state.available); }
+    finally { diagnosing = false; controls(); }
   }
   async function exportDrawingSample() {
     if (busy || saving || InkToCardStartup.failed()) return;
-    busy = true; element("export-sample").disabled = true;
+    busy = true; controls();
     try {
       var source = selected();
       var result = await MNBridge.send("exportDrawingSample", source);
@@ -194,7 +272,7 @@ var InkToCardApp = (function () {
   }
   async function recognize(snapshot, automatic, valid) {
     if (busy || saving || !snapshot || !snapshot.source) return false;
-    busy = true; controls();
+    busy = true; waitingForInk = false; trackingError = false; controls();
     try {
       status(automatic ? "正在自动识别…" : "正在识别笔迹颜色…");
       var source = snapshot.source, settingsToken = JSON.stringify(snapshot.settings);
@@ -206,15 +284,20 @@ var InkToCardApp = (function () {
         settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, histogram: histogram, scopeToken: snapshot.scopeToken });
       showCounts(result.counts);
       var color = config.mappingEntries.find(function (item) { return item.id === result.color; });
-      status((color ? color.label + (result.color === "uncolored" ? " · " : "笔迹 · ") : "") + result.reason);
+      var label = color ? color.label + (result.color === "uncolored" ? "" : "笔迹") : "";
+      var success = result.status === "applied" || result.status === "unchanged";
+      resultTarget = success ? result.colorIndex : null;
+      status(success ? label + " → " + (result.status === "applied" ? "已设置卡片色号 " : "已是卡片色号 ") + (result.colorIndex + 1)
+        : (label ? label + " · " : "") + result.reason, false, success);
       if (automatic) lastAuto = true;
-    } catch (error) { status(error.message, true); }
+    } catch (error) { trackingError = true; status(error.message, true); }
     finally { busy = false; await refresh(); controls(); }
     return true;
   }
   async function runBatch(scope) {
     if (busy || saving || diagnosing || InkToCardStartup.failed()) return;
     busy = true; batch = { id: null, cancelled: false }; controls();
+    element("batch-section").open = true;
     var active = batch, done = 0, changed = 0, unchanged = 0, skipped = 0, reasons = [];
     element("batch-details").textContent = "";
     function progress(message) { element("batch-status").textContent = message; }
@@ -273,11 +356,12 @@ var InkToCardApp = (function () {
     polling = true;
     try {
       var snapshot = await MNBridge.send("readCurrent"); render(snapshot);
-      if (!snapshot.available || !snapshot.settings.auto || !snapshot.source) { observation = ""; return; }
+      if (!snapshot.available || !snapshot.settings.auto || !snapshot.source) { observation = ""; waitingForInk = false; trackingStatus(); return; }
       var key = snapshot.scopeToken + ":" + snapshot.noteId + ":" + snapshot.source.index + ":" + snapshot.source.hash + ":" + JSON.stringify(snapshot.settings);
       // 至少间隔 300 毫秒确认同一媒体，避免积压的定时回调跳过稳定等待。
-      if (key !== observation) { observation = key; observedAt = Date.now(); return; }
+      if (key !== observation) { observation = key; observedAt = Date.now(); waitingForInk = true; trackingStatus(); return; }
       if (Date.now() - observedAt < 300) return;
+      waitingForInk = false; trackingStatus();
       var attemptKey = snapshot.topicId + ":" + snapshot.noteId + ":" + snapshot.source.index + ":" + snapshot.source.hash + ":" + JSON.stringify(snapshot.settings);
       if (attempted.has(attemptKey)) return;
       attempted.set(attemptKey, true);
@@ -312,6 +396,15 @@ var InkToCardApp = (function () {
     ["auto", "policy", "min-pixels", "dominance"].forEach(function (id) { element(id).addEventListener("change", save); });
     element("refresh").addEventListener("click", refresh);
     element("preview").addEventListener("click", preview);
+    element("preview-zoom").addEventListener("click", zoomPreview);
+    element("preview-close").addEventListener("click", function () { closePreview(true); });
+    element("preview-dialog").addEventListener("click", function (event) { if (event.target === element("preview-dialog")) closePreview(true); });
+    document.addEventListener("keydown", function (event) {
+      if (element("preview-dialog").hidden) return;
+      if (event.key === "Escape") { event.preventDefault(); closePreview(true); }
+      // 放大预览只有一个按钮，键盘焦点保持在关闭按钮，避免进入被遮住的面板。
+      if (event.key === "Tab") { event.preventDefault(); element("preview-close").focus(); }
+    });
     element("inspect-sources").addEventListener("click", inspectSources);
     element("export-sample").addEventListener("click", exportDrawingSample);
     element("batch-selected").addEventListener("click", function () { runBatch("selected"); });
