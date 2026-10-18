@@ -1,0 +1,8 @@
+AGENTS.md
+*.mnaddon
+*.mnaddon.zip
+dist/
+node_modules/
+diagnostics/
+*.preview.*
+社区介绍*.md
