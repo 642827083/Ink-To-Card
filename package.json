@@ -2,10 +2,12 @@
   "name": "ink-to-card",
   "version": "1.0.3",
   "private": true,
-  "description": "MarginNote 手写笔色转卡片颜色插件（历史源码快照）",
+  "description": "MarginNote 4 经典插件：识别手写笔色，自动改变卡片颜色",
   "author": "乔木Joe",
   "scripts": {
     "check": "node scripts/check.cjs",
+    "pretest": "node scripts/build.cjs",
+    "test": "node --test test/*.test.cjs",
     "build": "node scripts/build.cjs",
     "build:test": "node scripts/build.cjs",
     "build:release": "node scripts/build.cjs --release"
