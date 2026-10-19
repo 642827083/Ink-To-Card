@@ -87,9 +87,9 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     if (count < 1 || budget.count > MAX_POINTS || raw.length % count) fail("笔画点数或长度无效");
     var stride = raw.length / count;
     // 不同通道会压缩进公共头；只接受样本中逐项核对的组合。
-    var layouts = { 3: [12, 22], 67: [14, 20], 39: [18, 16], 103: [20, 14], 167: [20, 14], 231: [22, 12] };
+    var layouts = { 1: [8, 26], 3: [12, 22], 67: [14, 20], 131: [14, 20], 39: [18, 16], 103: [20, 14], 167: [20, 14], 231: [22, 12] };
     var layout = layouts[flags];
-    if (!layout || stride !== layout[0] || common.length !== layout[1]) fail("笔画通道布局变化");
+    if (!layout || stride !== layout[0] || common.length !== layout[1] || (flags === 1 && count !== 1)) fail("笔画通道布局变化");
     if (marker > 0) {
       // MN4.5/62 的 94 笔样本已由用户对照原图确认；仅放行这些布局和样本覆盖的数值范围。
       // 字段完整语义仍未知，只保留标记，不据此删减、裁剪或重排控制点。
@@ -101,7 +101,8 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       budget.pathMarkers.push({ strokeIndex: budget.strokeIndex, value: marker });
     }
     var view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    var commonWidth = stride < 16 ? new DataView(common.buffer, common.byteOffset, common.byteLength).getFloat32(0, true) : 0;
+    // MN4.5/64 的单点布局将笔宽放在 26 字节公共头的偏移 4；其他已验证短布局仍为偏移 0。
+    var commonWidth = stride < 16 ? new DataView(common.buffer, common.byteOffset, common.byteLength).getFloat32(flags === 1 ? 4 : 0, true) : 0;
     var scale = Math.sqrt(Math.abs(transform[0] * transform[3] - transform[1] * transform[2])), result = [];
     for (var i = 0; i < count; i += 1) {
       var start = i * stride, x = view.getFloat32(start, true), y = view.getFloat32(start + 4, true);
@@ -132,24 +133,33 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       if (first <= 0 || Math.abs(first - second) > first * 0.0001
         || Math.abs(transform[0] * transform[2] + transform[1] * transform[3]) > first * 0.0001) fail("未验证的笔画拉伸变换");
       var path = points(one(stroke, 5, 2), transform, budget);
-      verifiedLine(stroke, path);
+      verifiedMarkedPath(stroke, path);
       // 额外的遮罩、擦除和其他新字段会在 known 中拒绝，不能默默算入旧笔迹。
       return { color: inks[index].color, alpha: inks[index].alpha, points: path };
     });
     return { strokes: strokes, pointCount: budget.count, pathMarkers: budget.pathMarkers, previewOnly: budget.unverifiedPathMarkers };
   }
-  function verifiedLine(records, path) {
+  function verifiedMarkedPath(records, path) {
     var identifier = one(records, 13, 2, true), kind = one(records, 14, 0, true);
     if (identifier === null && kind === null) return;
-    // MN4.5.0 样本的两条直线带有这组字段；只放行相同标记与等宽直线路径，不推断其他值的语义。
-    if (!identifier || identifier.length !== 16 || kind !== 6) fail("笔画含未验证的直线标记");
+    // 同组字段已见于直线和曲线；只放行已核对的标记、等宽路径和控制点结构，不推断其他值的语义。
+    if (!identifier || identifier.length !== 16 || kind !== 6) fail("笔画含未验证的图形标记");
     var first = path[0], last = path[path.length - 1], dx = last.x - first.x, dy = last.y - first.y;
     var length = Math.sqrt(dx * dx + dy * dy), tolerance = Math.max(0.0001, length * 0.000001);
-    if (path.length < 2 || length === 0) fail("附加标记的直线路径变化");
+    if (path.length < 2 || length === 0) fail("附加标记的图形路径变化");
+    var straight = true;
     path.forEach(function (point) {
       var distance = Math.abs(dx * (point.y - first.y) - dy * (point.x - first.x)) / length;
-      if (distance > tolerance || Math.abs(point.width - first.width) > first.width * 0.0001) fail("附加标记的直线路径变化");
+      if (distance > tolerance) straight = false;
+      if (Math.abs(point.width - first.width) > first.width * 0.0001) fail("附加标记的图形路径变化");
     });
+    if (straight) return;
+    // MN4.5/64 两条等宽曲线均为布局 3、32 个点，除首尾外逐对重复；原样保留其坐标，不强制拉直。
+    var pathRecords = fields(one(records, 5, 2));
+    if (one(pathRecords, 4, 0) !== 3 || path.length !== 32) fail("附加标记的图形路径变化");
+    for (var i = 1; i < path.length - 1; i += 2) {
+      if (path[i].x !== path[i + 1].x || path[i].y !== path[i + 1].y) fail("附加标记的图形路径变化");
+    }
   }
   function render(drawing) {
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, paths = [], colors = [];

@@ -1,6 +1,6 @@
 {
   "name": "ink-to-card",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "MarginNote 4 经典插件：识别手写笔色，自动改变卡片颜色",
   "author": "乔木Joe",

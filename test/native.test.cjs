@@ -483,6 +483,28 @@ function uncoloredSetup(create=setup,raw=require('./helpers/handwriting.cjs').ha
   return env;
 }
 
+test('build64黑色图形曲线支持预览、单卡、自动和批量无彩色改色',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build64-marked-curves.wrd'));
+  for(const automatic of [false,true]){
+    const env=uncoloredSetup(setup,raw),source={noteId:'card',index:1,hash:'drawing:handwriting'};
+    env.settings=env.context.__INK_TO_CARD_CONFIG__.normalize({...env.settings,policy:'priority',mapping:{...env.settings.mapping,uncolored:1}});
+    env.native.saveSettings(env.addon,{noteId:'card',settings:env.settings});
+    assert.equal(env.commands.readPreview(env.addon,source).drawing.strokeCount,70);
+    assert.equal(env.commands.readMedia(env.addon,source).drawing.previewOnly,undefined);
+    const result=env.commands.applyResult(env.addon,env.request({automatic}));
+    assert.equal(result.status,'applied');assert.equal(result.color,'uncolored');assert.equal(env.note.colorIndex,1);
+    assert.equal(result.reason,'已设置卡片色号 2');
+  }
+  const env=uncoloredSetup(batchSetup,raw),job=env.commands.beginBatch(env.addon,{scope:'selected'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
+    assert.equal(item.skipped,undefined);assert.equal(item.media.drawing.strokeCount,70);
+    const result=env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId,histogram:env.request().histogram});
+    assert.equal(result.status,'applied');assert.equal(result.color,'uncolored');
+  }
+  assert.equal(env.note.colorIndex,5);assert.equal(env.child.colorIndex,5);assert.equal(env.image.colorIndex,0);
+});
+
 test('单卡与自动无彩色书写均须通过原生笔画验证，支持黑灰白且沿用撤销',()=>{
   const {handwriting}=require('./helpers/handwriting.cjs');
   for(const color of [[0,0,0,1],[0.5,0.5,0.5,1],[1,1,1,1]])for(const automatic of [true,false]){
@@ -554,8 +576,8 @@ test('网页批量无彩色书写通过实际原生命令改黑笔卡，彩笔�
 });
 
 
-test('已核对路径标记支持单卡、自动和批量，仍只处理最后手写绘图',()=>{
-  for(const file of ['mn4-450-build62-path9-black-red.wrd','mn4-450-build62-path9-red.wrd','mn4-450-build62-path9-94-strokes.wrd']){
+test('已核对路径标记和单点布局支持单卡、自动和批量，仍只处理最后手写绘图',()=>{
+  for(const file of ['mn4-450-build62-path9-black-red.wrd','mn4-450-build62-path9-red.wrd','mn4-450-build62-path9-94-strokes.wrd','mn4-450-build64-single-point.wrd']){
     const env=batchSetup(),raw=fs.readFileSync(path.resolve(__dirname,'fixtures',file));
     env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
     const source={noteId:'card',index:1,hash:'drawing:handwriting'};
@@ -572,6 +594,29 @@ test('已核对路径标记支持单卡、自动和批量，仍只处理最后�
     }
     assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
   }
+});
+
+test('build64布局131蓝色样本支持单卡、自动和批量蓝色改色，不误用无彩色映射',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build64-layout131-blue.wrd'));
+  const histogram={pixels:10000,colored:100,counts:{red:0,orange:0,yellow:0,green:0,cyan:0,blue:100,purple:0}};
+  for(const automatic of [false,true]){
+    const env=uncoloredSetup(setup,raw),source={noteId:'card',index:1,hash:'drawing:handwriting'};
+    assert.equal(env.commands.readPreview(env.addon,source).drawing.strokeCount,61);
+    assert.equal(env.commands.readMedia(env.addon,source).drawing.previewOnly,undefined);
+    const result=env.commands.applyResult(env.addon,env.request({automatic,histogram}));
+    assert.equal(result.status,'applied');assert.equal(result.color,'blue');assert.equal(env.note.colorIndex,2);
+    assert.equal(result.reason,'已设置卡片色号 3');
+  }
+  const env=uncoloredSetup(batchSetup,raw),job=env.commands.beginBatch(env.addon,{scope:'selected'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
+    assert.equal(item.skipped,undefined);assert.equal(item.media.drawing.strokeCount,61);
+    const result=env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId,histogram});
+    assert.equal(result.status,'applied');assert.equal(result.color,'blue');
+  }
+  assert.equal(env.note.colorIndex,2);assert.equal(env.child.colorIndex,2);assert.equal(env.image.colorIndex,0);
+  const missed=uncoloredSetup(setup,raw),result=missed.commands.applyResult(missed.addon,missed.request());
+  assert.equal(result.status,'insufficient');assert.match(result.reason,/仍含彩色/);assert.deepEqual(missed.writes,[]);
 });
 
 test('预览不能越过兼容范围授予写入：越界路径标记仍拒绝识别和改色',()=>{
