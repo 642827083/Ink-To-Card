@@ -30,6 +30,33 @@ function channels(flags,legacy=false,extra={}){
   return Buffer.concat([Buffer.from('wrd'),field(4,2,ink),field(5,2,stroke)]);
 }
 
+test('MN5 build5真实20字节公共头保留3条红笔199点及变换后的坐标和笔宽',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-500-build5-common20-red.wrd')),d=decoder();
+  assert.equal(raw.length,4208);
+  assert.equal(require('node:crypto').createHash('sha256').update(raw).digest('hex'),'1fff268a5d37d7ed57721e8626b1709e8761258697dedebaee6b198b906016f0');
+  const result=d.decode(d.decodeBase64(raw.toString('base64'),raw.length));
+  assert.equal(result.strokes.length,3);assert.equal(result.pointCount,199);
+  assert.deepEqual(Array.from(result.strokes,s=>s.points.length),[78,80,41]);
+  assert.ok(result.strokes.every(s=>s.color==='#fd2f43'&&s.alpha===1));
+  const first=result.strokes[0].points[0],last=result.strokes[2].points.at(-1);
+  for(const [actual,expected]of [[first.x,120.20336537063122],[first.y,110.40354244410992],[first.width,14.923453620279759],
+    [last.x,1014.4736187756062],[last.y,307.8398321568966],[last.width,12.581710519233411]])assert.ok(Math.abs(actual-expected)<0.000001);
+  const strict=media(raw),preview=media(raw,true);
+  assert.equal(strict.dataURL,preview.dataURL);assert.equal(strict.drawing.previewOnly,undefined);
+  assert.deepEqual(Array.from(strict.drawing.colors),['#fd2f43']);
+  assert.equal((decodeURIComponent(strict.dataURL.split(',')[1]).match(/<polyline /g)||[]).length,3);
+});
+
+test('20字节公共头仅用于已核对的布局39，不改变逐点坐标与笔宽，也不放开其他组合',()=>{
+  const regular=media(channels(39)).dataURL;
+  assert.equal(media(channels(39,false,{common:Buffer.alloc(20,0xff)})).dataURL,regular);
+  for(const length of [13,15,17,18,19,21,22,24,26])assert.throws(()=>media(channels(39,false,{common:Buffer.alloc(length)})),/通道布局/);
+  for(const flags of [1,3,7,103,195,231])assert.throws(()=>media(channels(flags,false,{common:Buffer.alloc(20)})),/通道布局/);
+  for(const extra of [{raw:Buffer.alloc(55)},{raw:Buffer.alloc(60)},{marker:3}])assert.throws(()=>media(channels(39,false,{common:Buffer.alloc(20),...extra})),/通道布局|点数或长度|未验证标记/);
+  const invalidWidth=Buffer.alloc(54);for(let i=0;i<3;i++)invalidWidth.writeFloatLE(NaN,i*18+12);
+  assert.throws(()=>media(channels(39,false,{common:Buffer.alloc(20),raw:invalidWidth})),/坐标或宽度/);
+});
+
 test('按通道定义解析全部32种已知位组合，公共笔宽、多点和路径标记不再逐个列白名单',()=>{
   for(let combination=0;combination<32;combination++){
     const flags=1|(combination&3)<<1|(combination>>2)<<5,raw=channels(flags),d=decoder();

@@ -28,6 +28,19 @@ function setup() {
     histogram:{pixels:10000,colored:100,counts:{red:100,orange:0,yellow:0,green:0,cyan:0,blue:0,purple:0}},...overrides};}
   return {storage,writes,mediaReads,note,addon,notebook,database,context,native,commands,settings,request};
 }
+
+test('社区跳转通过经典原生接口打开固定帖子，无需选卡且不读写卡片',()=>{
+  const env=setup(),opened=[];
+  env.notebook.focusNote=null;
+  env.context.NSURL={URLWithString:address=>({address})};
+  const app=env.context.Application.sharedInstance();app.openURL=url=>opened.push(url.address);
+  env.context.Application.sharedInstance=()=>app;
+  assert.equal(env.commands.openCommunity(env.addon,{url:'https://example.com/'}).requested,true);
+  assert.deepEqual(opened,['https://bbs.marginnote.com.cn/t/topic/68658/']);
+  assert.deepEqual(env.mediaReads,[]);assert.deepEqual(env.writes,[]);
+  app.openURL=undefined;assert.throws(()=>env.commands.openCommunity(env.addon),/无法打开社区帖子/);
+  env.context.NSURL=undefined;assert.throws(()=>env.commands.openCommunity(env.addon),/无法打开社区帖子/);
+});
 test('无当前卡片时提示在脑图选中，不要求双击进入焦点',()=>{
   const env=setup();env.notebook.focusNote=null;
   const state=env.native.snapshot(env.addon);
@@ -667,9 +680,10 @@ test('预览不能越过兼容范围授予写入：越界路径标记仍拒绝�
   assert.deepEqual(env.writes,[]);
 });
 
-test('恢复的真实归档和公共宽度路径标记共用单卡、自动、批量读取与改色入口',()=>{
+test('MN5公共头、恢复的真实归档和公共宽度路径标记共用单卡、自动、批量读取与改色入口',()=>{
   const {handwriting}=require('./helpers/handwriting.cjs');
-  for(const raw of [fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-446-build3-archive.bplist')),
+  for(const raw of [fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-500-build5-common20-red.wrd')),
+    fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-446-build3-archive.bplist')),
     handwriting([{color:[1,0,0,1],layout:3,pathMarker:1}])]){
     const env=batchSetup();env.context.UIImage.imageWithData=()=>{throw Error('手写归档不应走图片解码');};
     env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});

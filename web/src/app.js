@@ -407,6 +407,10 @@ var InkToCardApp = (function () {
     });
     element("inspect-sources").addEventListener("click", inspectSources);
     element("export-sample").addEventListener("click", exportDrawingSample);
+    element("open-community").addEventListener("click", async function () {
+      try { await MNBridge.send("openCommunity"); }
+      catch (error) { status(error.message, true); }
+    });
     element("batch-selected").addEventListener("click", function () { runBatch("selected"); });
     element("batch-notebook").addEventListener("click", function () { runBatch("notebook"); });
     element("batch-cancel").addEventListener("click", cancelBatch);

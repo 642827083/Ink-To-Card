@@ -359,7 +359,17 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     if (!fresh || Number(fresh.colorIndex) !== result.colorIndex) throw new Error("改色后读取不一致，请检查卡片状态");
     return Object.assign(result, { status: "applied", reason: "已设置卡片色号 " + (result.colorIndex + 1) });
   }
-  return { value: value, list: list, current: current, snapshot: snapshot, saveSettings: saveSettings,
+  function openCommunity() {
+    if (typeof Application === "undefined" || typeof Application.sharedInstance !== "function"
+      || typeof NSURL === "undefined" || typeof NSURL.URLWithString !== "function") throw new Error("当前 MN 无法打开社区帖子");
+    var app = Application.sharedInstance();
+    if (!app || typeof app.openURL !== "function") throw new Error("当前 MN 无法打开社区帖子");
+    var url = NSURL.URLWithString("https://bbs.marginnote.com.cn/t/topic/68658/");
+    if (!url) throw new Error("社区帖子地址无法打开");
+    app.openURL(url);
+    return { requested: true };
+  }
+  return { value: value, list: list, current: current, snapshot: snapshot, saveSettings: saveSettings, openCommunity: openCommunity,
     media: media, apply: apply, inspectSources: inspectSources,
     exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, previewDrawing: previewDrawing, database: database,
     settings: settings, describeNote: describeNote, latestDrawing: latestDrawing,

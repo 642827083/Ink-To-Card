@@ -205,13 +205,14 @@ test('未捕获的页面初始化异常显示原因', async () => {
   assert.equal(page.context.document.body.children.length, 0);
 });
 
-test('经典安装包彩色与无彩色书写：取消选中仍跟踪，稳定后自动及手动改色', async () => {
- for(const uncolored of [false,true]){
+test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选中仍跟踪，稳定后自动及手动改色', async () => {
+ for(const sample of ['mn4-450-build62-path9-94-strokes.wrd','mn5-500-build5-common20-red.wrd',null]){
+  const uncolored=sample===null;
   const storage=new Map(),calls=[],mediaReads=[];
   const note={noteId:'A',notebookId:'topic',noteTitle:'跟踪卡片A',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-A'}]},
     other={noteId:'B',notebookId:'topic',noteTitle:'卡片B',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-B'}]};
   const notebook={notebookId:'topic',focusNote:note,mindmapView:{selViewLst:[{note}]}},addon={window:{},inkClassicTracking:true,inkSceneEpoch:1,inkNotebookOpen:true};
-  const raw=uncolored?require('./helpers/handwriting.cjs').handwriting([{pathMarker:1}]):fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build62-path9-94-strokes.wrd'));
+  const raw=uncolored?require('./helpers/handwriting.cjs').handwriting([{pathMarker:1}]):fs.readFileSync(path.resolve(__dirname,'fixtures',sample));
   const native=vm.createContext({
     NSUserDefaults:{standardUserDefaults:()=>({objectForKey:key=>storage.get(key),setObjectForKey:(value,key)=>storage.set(key,value)})},
     Database:{sharedInstance:()=>({getNoteById:id=>id==='A'?note:id==='B'?other:null,getMediaByHash:hash=>{mediaReads.push(hash);return {length:raw.length,base64Encoding:()=>raw.toString('base64')};}})},
@@ -255,6 +256,18 @@ test('经典安装包彩色与无彩色书写：取消选中仍跟踪，稳定�
   assert.equal(calls.filter(command=>command==='applyResult').length,uncolored?3:2);
   assert.equal(page.timers.size,0);
  }
+});
+
+test('问题排查中的社区按钮通过经典桥接打开帖子，未选卡也可使用',async()=>{
+  const calls=[];
+  const page=packagedPage({onBridge(address,context){
+    const request=JSON.parse(decodeURIComponent(address.split('payload=')[1]));calls.push(request.command);
+    context.InkToCardReceive({requestId:request.requestId,payload:request.command==='openCommunity'?{requested:true}:{available:false,reason:'请先选一张卡片'}});
+  }});
+  await page.start();
+  const button=page.elements.get('open-community');assert.equal(button.disabled,undefined);
+  await button.handlers.get('click')();assert.equal(calls.at(-1),'openCommunity');
+  assert.deepEqual(page.errors,[]);
 });
 
 test('经典安装包即使宿主提供 mn 对象，仍使用经典 iframe 桥接',async()=>{

@@ -6,6 +6,7 @@ var __INK_TO_CARD_COMMANDS__ = (function () {
     trackNote: function (addon, payload) { return native.trackNote(addon, payload); },
     inspectSources: function (addon, payload) { return native.inspectSources(addon, payload); },
     exportDrawingSample: function (addon, payload) { return native.exportDrawingSample(addon, payload); },
+    openCommunity: function () { return native.openCommunity(); },
     saveSettings: function (addon, payload) { return native.saveSettings(addon, payload); },
     readMedia: function (addon, payload) { return native.readDrawing(addon, payload); },
     readPreview: function (addon, payload) { return native.previewDrawing(addon, payload); },

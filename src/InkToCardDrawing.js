@@ -124,7 +124,10 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     });
     // 新旧公共头的固定尾部分别为 12、10 字节；旧头仅对已确认的逐点笔宽规则启用。
     var expected = commonOffset + 12, legacy = layout.pointWidth !== null && commonLength === commonOffset + 10;
-    if (stride !== pointOffset || (commonLength !== expected && !legacy)) fail("笔画通道布局变化：通道与数据长度不一致");
+    // MN5.0/build5 实样的布局39公共头为20字节；坐标和笔宽均来自逐点区，不读取该扩展头中的附加字节。
+    // 仅接受已核对的这一组合，不能推定其他通道的公共笔宽偏移或头长度也相同。
+    var extended = flags === 39 && commonLength === 20;
+    if (stride !== pointOffset || (commonLength !== expected && !legacy && !extended)) fail("笔画通道布局变化：通道与数据长度不一致");
     layout.stride = pointOffset;
     return layout;
   }

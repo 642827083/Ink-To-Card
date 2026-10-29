@@ -4,6 +4,7 @@
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px}.row>button{flex-shrink:0}h2{font-size:14px;margin:0;font-weight:650}
 .caption{font-size:12px;color:#656e7c}.context strong{display:block;font-size:17px;line-height:1.45;margin:3px 0 5px;overflow-wrap:anywhere;min-width:0}.note-heading{align-items:baseline}.note-heading .caption{white-space:nowrap}
 .hint{color:#656e7c;font-size:12px;line-height:1.7;margin:10px 0}.footnote{color:#6e7785;font-size:11px;line-height:1.65;margin:8px 0 0}
+#open-community+.hint{margin-top:0}
 button,select,input{font:inherit;touch-action:manipulation}button{border:0;cursor:pointer;min-height:36px;border-radius:8px;padding:8px 11px;font-size:12px;font-weight:550}button:disabled{opacity:.45;cursor:default}
 button,button *,select,input,summary,summary *{-webkit-tap-highlight-color:transparent}
 /* 自绘控件不叠加 WebKit 原生按压外观，保留键盘焦点与正常点击行为。 */
