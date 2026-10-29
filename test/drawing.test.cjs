@@ -9,9 +9,10 @@ function minimal(options={}){
   const color=Buffer.concat([float(1,1),float(2,0),float(3,0),float(4,options.alpha??1)]);
   const ink=Buffer.concat([field(1,2,color),field(2,2,Buffer.from(options.brush??'com.apple.ink.pen')),field(3,0,3)]);
   const coordinates=options.points??[[options.x??10,20,3]];
-  const compact=options.layout===3||options.layout===131,common=Buffer.alloc(options.commonSize??(compact?(options.layout===131?20:22):16));
+  const sharedLayouts={3:[12,22],131:[14,20],195:[16,18]},shared=sharedLayouts[options.layout],compact=!!shared;
+  const common=Buffer.alloc(options.commonSize??(compact?shared[1]:16));
   if(compact)common.writeFloatLE(coordinates[0][2]);
-  const points=Buffer.concat(coordinates.map(([x,y,width])=>{const p=Buffer.alloc(options.stride??(compact?(options.layout===131?14:12):18));p.writeFloatLE(x);p.writeFloatLE(y,4);if(!compact)p.writeFloatLE(width,12);return p;}));
+  const points=Buffer.concat(coordinates.map(([x,y,width])=>{const p=Buffer.alloc(options.stride??(compact?shared[0]:18));p.writeFloatLE(x);p.writeFloatLE(y,4);if(!compact)p.writeFloatLE(width,12);if(options.pointTail!==undefined)p.writeUInt32LE(options.pointTail,12);return p;}));
   const pathBytes=Buffer.concat([field(3,0,coordinates.length),field(4,0,options.layout??39),field(6,2,common),field(7,2,points),...(options.extraPath?[options.extraPath]:[])]);
   const transform=Buffer.concat([float(1,1),float(2,0),float(3,0),float(4,1),float(5,0),float(6,0)]);
   const stroke=Buffer.concat([field(4,0,options.inkIndex??0),field(5,2,pathBytes),field(7,2,transform),...(options.extraStroke?[options.extraStroke]:[])]);
@@ -28,6 +29,56 @@ function pairedCurve(vertices=17){
   }
   return points;
 }
+
+test('MN4.4.6旧公共头样本保留8条深棕笔画、169个点和原始笔宽',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-446-build3-brown.wrd')),d=decoder(),result=read(raw);
+  assert.equal(result.strokes.length,8);assert.equal(result.pointCount,169);
+  assert.ok(result.strokes.every(stroke=>stroke.color==='#3b272d'));
+  const widths=result.strokes[0].points.map(point=>point.width);
+  assert.ok(Math.abs(Math.min(...widths)-9.897571914421462)<0.000001);
+  assert.ok(Math.abs(Math.max(...widths)-10.647353985458437)<0.000001);
+  const media=d.media(raw.toString('base64'),raw.length),preview=d.preview(raw.toString('base64'),raw.length);
+  assert.equal(media.drawing.previewOnly,undefined);assert.equal(media.dataURL,preview.dataURL);
+  assert.equal(media.drawing.pathMarkers.length,6);
+  assert.equal((decodeURIComponent(media.dataURL.split(',')[1]).match(/<polyline /g)||[]).length,8);
+});
+
+test('旧公共头仅用于已验证的逐点笔宽布局，新旧格式保留同一坐标与宽度',()=>{
+  const points=[[10,20,3],[14,25,4]];
+  for(const [layout,stride,oldSize,newSize] of [[39,18,14,16],[103,20,12,14],[167,20,12,14],[231,22,10,12]]){
+    const older=read(minimal({layout,stride,commonSize:oldSize,points}));
+    const newer=read(minimal({layout,stride,commonSize:newSize,points}));
+    assert.equal(JSON.stringify(older.strokes),JSON.stringify(newer.strokes));
+    assert.equal(JSON.stringify(older.strokes[0].points),JSON.stringify([{x:10,y:20,width:3},{x:14,y:25,width:4}]));
+  }
+  for(const options of [{layout:39,commonSize:13},{layout:39,commonSize:15},{layout:39,commonSize:17},
+    {layout:195,commonSize:16},{layout:131,commonSize:18},{layout:39,commonSize:14,stride:20}]){
+    assert.throws(()=>read(minimal({...options,points})),/通道布局/);
+  }
+});
+
+test('布局195真实样本保留92条黑笔、2596个点和公共笔宽',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build64-layout195-black.wrd')),d=decoder(),result=read(raw);
+  assert.equal(result.strokes.length,92);assert.equal(result.pointCount,2596);
+  assert.ok(result.strokes.every(s=>s.color==='#000000'));
+  assert.equal(result.strokes[26].points.length,2);
+  for(const point of result.strokes[26].points)assert.ok(Math.abs(point.width-3.4660746322260536)<0.000001);
+  const media=d.media(raw.toString('base64'),raw.length),preview=d.preview(raw.toString('base64'),raw.length);
+  assert.equal(media.drawing.previewOnly,undefined);assert.equal(media.dataURL,preview.dataURL);
+  assert.equal((decodeURIComponent(media.dataURL.split(',')[1]).match(/<(?:circle|polyline) /g)||[]).length,92);
+});
+
+test('布局195的16字节点从公共头取宽，不把末尾通道误读成浮点笔宽',()=>{
+  const raw=minimal({layout:195,points:[[10,20,3.125],[14,25,3.125]],pointTail:0x7fc00000}),result=read(raw);
+  assert.equal(JSON.stringify(result.strokes[0].points),JSON.stringify([{x:10,y:20,width:3.125},{x:14,y:25,width:3.125}]));
+});
+
+test('布局195仍拒绝错误长度、异常公共笔宽和越界路径标记',()=>{
+  for(const options of [{commonSize:17},{commonSize:19},{stride:14},{stride:18},
+    {points:[[10,20,0]]},{points:[[10,20,NaN]]},{points:[[10,20,1001]]},{extraPath:field(9,0,2)}]){
+    assert.throws(()=>read(minimal({layout:195,points:[[10,20,3],[14,25,3]],...options})),/通道布局|坐标或宽度|未验证标记/);
+  }
+});
 
 test('build64布局131真实样本完整解析61条蓝笔、1436个点，保留两点短笔画',()=>{
   const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build64-layout131-blue.wrd')),d=decoder(),result=read(raw);
@@ -46,9 +97,9 @@ test('布局131从公共头读取笔宽，不把点尾通道作为宽度',()=>{
   assert.equal(JSON.stringify(result.strokes[0].points),JSON.stringify([{x:10,y:20,width:3.125},{x:14,y:25,width:3.125}]));
 });
 
-test('布局131仍拒绝错误长度、无效宽度和未验证路径标记',()=>{
+test('布局131仍拒绝错误长度、无效宽度和越界路径标记',()=>{
   for(const options of [{commonSize:19},{commonSize:21},{stride:12},{stride:16},
-    {points:[[10,20,0],[14,25,0]]},{points:[[10,20,NaN],[14,25,NaN]]},{extraPath:field(9,0,1)}]){
+    {points:[[10,20,0],[14,25,0]]},{points:[[10,20,NaN],[14,25,NaN]]},{extraPath:field(9,0,2)}]){
     assert.throws(()=>read(minimal({layout:131,points:[[10,20,3],[14,25,3]],...options})),/通道布局|坐标或宽度|未验证标记/);
   }
 });
@@ -75,11 +126,15 @@ test('图形曲线按已有配对控制点原样渲染，不拉直、不删点',
   });
 });
 
-test('图形曲线仅放行已核对的布局、点数和重复点结构',()=>{
+test('图形曲线不要求32点或重复点，不同通道组合仍完整保留原路径',()=>{
   const broken=pairedCurve();broken[2][1]+=1;
   for(const options of [{layout:39,points:pairedCurve()},{layout:3,points:pairedCurve(16)},
     {layout:3,points:pairedCurve(18)},{layout:3,points:broken}]){
-    assert.throws(()=>read(minimal({...options,extraStroke:lineFields()})),/路径变化/);
+    const result=read(minimal({...options,extraStroke:lineFields()}));
+    assert.equal(result.pointCount,options.points.length);
+    result.strokes[0].points.forEach((point,index)=>{
+      assert.equal(point.x,options.points[index][0]);assert.ok(Math.abs(point.y-options.points[index][1])<0.0001);assert.equal(point.width,3);
+    });
   }
 });
 
@@ -117,9 +172,10 @@ test('单点布局从公共头第4字节读取笔宽，坐标、颜色和圆点�
   assert.match(decodeURIComponent(d.media(raw.toString('base64'),raw.length).dataURL.split(',')[1]),/<circle cx="10" cy="20" r="1.625" fill="#ff0000"/);
 });
 
-test('新增单点兼容不放宽多点、长度、笔宽、坐标和路径标记检查',()=>{
+test('坐标通道支持多点，长度、笔宽、坐标和越界标记仍检查',()=>{
   const d=decoder();
-  for(const options of [{count:2,rawSize:16},{commonSize:25},{commonSize:27},{rawSize:9},{flags:2},
+  assert.equal(read(singlePoint({count:2,rawSize:16})).pointCount,2);
+  for(const options of [{commonSize:25},{commonSize:27},{rawSize:9},{flags:2},
     {width:0},{width:-1},{width:NaN},{width:1001},{x:NaN},{marker:1}]){
     const raw=singlePoint(options);
     assert.throws(()=>d.media(raw.toString('base64'),raw.length),/通道布局|点数或长度|坐标或宽度|未验证标记/);
@@ -145,13 +201,14 @@ test('最小直线路径带13/14字段时不丢失坐标、宽度或颜色',()=>
   assert.equal(result.strokes[0].color,'#ff0000');
 });
 
-test('直线附加字段缺失、重复、值变化或路径不同仍拒绝识别',()=>{
+test('图形标记须成对且值有效，不再要求直线或等宽、首尾不重合',()=>{
   const base={points:[[10,20,3],[30,20,3]]};
   for(const extraStroke of [field(13,2,Buffer.alloc(16)),field(14,0,6),lineFields(Buffer.alloc(15)),lineFields(Buffer.alloc(16),7),Buffer.concat([lineFields(),field(14,0,6)])]) {
     assert.throws(()=>read(minimal({...base,extraStroke})),/字段|图形标记/);
   }
   for(const points of [[[10,20,3]],[[10,20,3],[20,25,3],[30,20,3]],[[10,20,3],[30,20,4]],[[10,20,3],[10,20,3]]]) {
-    assert.throws(()=>read(minimal({points,extraStroke:lineFields()})),/路径变化/);
+    const result=read(minimal({points,extraStroke:lineFields()}));
+    assert.equal(JSON.stringify(result.strokes[0].points),JSON.stringify(points.map(([x,y,width])=>({x,y,width}))));
   }
   assert.throws(()=>read(minimal({...base,extraStroke:Buffer.concat([lineFields(),field(9,2,Buffer.from([1]))])})),/未验证字段 9/);
 });
@@ -234,12 +291,12 @@ test('用户核对正确的94笔样本通过识别解析，保留全部27个非�
 });
 
 
-test('路径标记仅对已核对布局和范围开放，重复字段与超界值仍不用于识别',()=>{
+test('路径标记不限制通道组合，重复字段与超界值仍不用于识别',()=>{
   const d=decoder(),{handwriting}=require('./helpers/handwriting.cjs');
   const valid=handwriting([{pathMarker:1}]);assert.equal(d.media(valid.toString('base64'),valid.length).drawing.previewOnly,undefined);
-  const unknownLayout=handwriting([{pathMarker:1,layout:3}]);
-  assert.throws(()=>d.media(unknownLayout.toString('base64'),unknownLayout.length),/未验证标记/);
-  assert.equal(d.preview(unknownLayout.toString('base64'),unknownLayout.length).drawing.previewOnly,true);
+  const sharedWidth=handwriting([{pathMarker:1,layout:3}]);
+  assert.equal(d.media(sharedWidth.toString('base64'),sharedWidth.length).drawing.previewOnly,undefined);
+  assert.equal(d.preview(sharedWidth.toString('base64'),sharedWidth.length).drawing.previewOnly,undefined);
   for(const marker of [2,3,999999]){
     const raw=handwriting([{pathMarker:marker}]);assert.throws(()=>d.media(raw.toString('base64'),raw.length),/未验证标记/);
   }

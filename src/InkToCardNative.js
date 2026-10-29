@@ -191,22 +191,22 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     var app = Application.sharedInstance(), report = { noteId: payload.noteId, summary: summary,
       appVersion: String(value(app, "appVersion") || "未知"), build: String(value(app, "build") || "未知"), focus: focusInfo, database: databaseInfo };
     if (payload.inspectMedia) {
-      report.drawingMedia = sources(fresh).filter(function (source) { return source.kind === "drawing"; }).slice(0, 3).map(function (source) {
+      report.drawingMedia = sources(fresh).filter(function (source) { return source.kind === "drawing"; }).slice(-3).map(function (source) {
         try {
           var data = database().getMediaByHash(source.mediaHash);
           if (!data) return { index: source.index, error: "媒体未下载或未找到" };
           var bytes = Number(value(data, "length"));
           if (bytes > 12 * 1024 * 1024) return { index: source.index, bytes: bytes, error: "超过 12 MB，跳过解码" };
-          var prefix = String(value(data, "base64Encoding") || "").slice(0, 12);
+          var encoded = value(data, "base64Encoding"), prefix = String(encoded || "").slice(0, 12);
           var format = prefix.indexOf("iVBORw0KGgo") === 0 ? "PNG" : prefix.indexOf("/9j/") === 0 ? "JPEG"
             : prefix.indexOf("YnBsaXN0MD") === 0 ? "二进制 Property List" : prefix.indexOf("d3Jk") === 0 ? "PencilKit wrd 绘图" : "未知二进制格式";
-          if (format === "PencilKit wrd 绘图") {
-            var preview = __INK_TO_CARD_DRAWING__.media(value(data, "base64Encoding"), bytes);
+          if (__INK_TO_CARD_DRAWING__.supports(encoded)) {
+            var preview = __INK_TO_CARD_DRAWING__.media(encoded, bytes);
             return { index: source.index, bytes: bytes, format: format, drawingDecoded: true, strokeCount: preview.drawing.strokeCount };
           }
           var image = typeof UIImage !== "undefined" && typeof UIImage.imageWithData === "function" ? UIImage.imageWithData(data) : null;
           return { index: source.index, bytes: bytes, format: format, imageDecoded: !!image };
-        } catch (error) { return { index: source.index, error: String(error.message || error).slice(0, 160) }; }
+        } catch (error) { return { index: source.index, bytes: bytes, format: format, error: String(error.message || error).slice(0, 160) }; }
       });
     }
     return report;
@@ -247,7 +247,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     if (Number(value(data, "length")) > 12 * 1024 * 1024) throw new Error("批注图片超过 12 MB，请缩小图片后重试");
     if (candidate.kind === "drawing") {
       var raw = value(data, "base64Encoding");
-      if (typeof raw === "string" && raw.indexOf("d3Jk") === 0) {
+      if (__INK_TO_CARD_DRAWING__.supports(raw)) {
         var reader = previewOnly === true ? __INK_TO_CARD_DRAWING__.preview : __INK_TO_CARD_DRAWING__.media;
         var rendered = reader(raw, Number(value(data, "length")));
         return Object.assign(rendered, { hash: candidate.hash, index: candidate.index });
@@ -256,7 +256,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     if (typeof UIImage === "undefined" || typeof UIImage.imageWithData !== "function") throw new Error("当前 MN 不支持解码批注图片");
     var image = UIImage.imageWithData(data);
     if (!image) throw new Error(candidate.kind === "drawing"
-      ? "已读取 drawing 媒体（" + Number(value(data, "length")) + " 字节），但无法解码为图片，也不是已支持的 wrd 绘图格式。请检查来源或导出绘图样本。"
+      ? "已读取 drawing 媒体（" + Number(value(data, "length")) + " 字节），但无法解码为图片，也不是已支持的绘图或归档格式。请检查来源或导出绘图样本。"
       : "该批注不是可读取的图片；原始笔画数据暂不支持");
     var size = value(image, "size");
     if (!size || size.width * size.height > 24000000) throw new Error("批注图片尺寸过大或无效");

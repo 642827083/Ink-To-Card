@@ -49,7 +49,7 @@ test('MN5 融合面板按官方 mn.call 分发命令，关闭及后台使会话�
 test('测试包保留 MN4 经典入口和面板、乔木Joe作者，排除场景插件依赖',()=>{
   const entries=unpack(fs.readFileSync(path.resolve(__dirname,'../Ink To Card Test.mnaddon')));
   const manifest=JSON.parse(entries.find(e=>e.name==='mnaddon.json').data);
-  assert.equal(manifest.author,'乔木Joe');assert.equal(manifest.marginnote_version_min,'4.0.0');
+  assert.equal(manifest.author,'乔木Joe');assert.equal(manifest.marginnote_version_min,'4.2.3');
   assert.equal(manifest.panel,undefined);assert.equal(manifest.events,undefined);assert.equal(manifest.immersiveOnly,undefined);
   assert.ok(entries.find(e=>e.name==='InkToCardPanel.js'));
   assert.ok(!entries.find(e=>e.name==='web/src/lib/inkFollow.js'||e.name==='InkToCardSceneAddon.js'));
