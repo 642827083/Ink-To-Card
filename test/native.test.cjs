@@ -17,7 +17,7 @@ function setup() {
     UndoManager:{sharedInstance:()=>({undoGrouping:(label,topic,fn)=>{writes.push(['undo',topic]);fn();}})},
     UIImage:{imageWithData:()=>({size:{width:100,height:100},pngData:()=>({base64Encoding:()=> 'aGVsbG8='})})}
   });
-  for(const file of ['InkToCardConfig.js','InkToCardCore.js','InkToCardDrawing.js','InkToCardNative.js','InkToCardBatch.js','WebBridgeCommands.js']) {
+  for(const file of ['InkToCardConfig.js','InkToCardCore.js','InkToCardDrawing.js','InkToCardAnalysis.js','InkToCardNative.js','InkToCardBatch.js','WebBridgeCommands.js']) {
     const filename=path.resolve(__dirname,'../src',file);
     if(fs.existsSync(filename))vm.runInContext(fs.readFileSync(filename,'utf8'),context);
   }
@@ -385,7 +385,7 @@ test('空选择、未配置红色映射、超大批次明确报错',()=>{
 });
 
 function webBatchSetup(options={}) {
-  const env=batchSetup(), elements=new Map(), calls=[], imageCallbacks=[];
+  const env=batchSetup(), elements=new Map(), calls=[], prepareCallbacks=[];
   function element(id) {
     if(!elements.has(id)) elements.set(id,{textContent:'',hidden:false,style:{},appendChild(){},replaceChildren(){},
       setAttribute(key,value){this[key]=value;},removeAttribute(key){delete this[key];}});
@@ -398,15 +398,16 @@ function webBatchSetup(options={}) {
   }
   const web=vm.createContext({console,setTimeout,clearTimeout,
     InkToCardStartup:{failed:()=>false,settled(){}},
-    MNBridge:{send:async(command,payload)=>{calls.push(command);const result=env.commands[command](env.addon,payload);options.onCommand?.(command,env);return result;}},
-    Image:class {naturalWidth=100;naturalHeight=100;set src(value){imageCallbacks.push(()=>this.onload());if(!options.deferImages)queueMicrotask(()=>this.onload());}},
+    MNBridge:{send:async(command,payload)=>{calls.push(command);const result=env.commands[command](env.addon,payload);options.onCommand?.(command,env);
+      if(command==='prepareBatchCard'&&options.deferPrepare)return new Promise(resolve=>prepareCallbacks.push(()=>resolve(result)));return result;}},
+    Image:class {constructor(){throw Error('识色不应创建图片');}},
     document:{readyState:'loading',body:{},addEventListener(){},getElementById:element,querySelectorAll:()=>[],
-      createElement:()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:rgba})})})}
+      createElement:()=>{throw Error('识色不应创建Canvas');}}
   });
   web.window=web;
   for(const file of ['src/InkToCardConfig.js','src/InkToCardCore.js','web/src/app.js'])vm.runInContext(fs.readFileSync(path.resolve(__dirname,'..',file),'utf8'),web);
   env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,policy:'red'}});
-  return {...env,web,elements,calls,imageCallbacks};
+  return {...env,web,elements,calls,prepareCallbacks};
 }
 test('网页批量通过实际原生命令处理多卡，使用红色模式并显示完成与跳过详情',async()=>{
   const env=webBatchSetup();await env.web.InkToCardApp.refresh();
@@ -416,12 +417,12 @@ test('网页批量通过实际原生命令处理多卡，使用红色模式并�
   assert.match(env.elements.get('batch-details').textContent,/普通图片卡.*没有可读取的手写绘图/);
   assert.equal(env.elements.get('batch-notebook').disabled,false);assert.equal(env.addon.inkBatch,null);
 });
-test('网页取消图像分析中的批次，不能继续提交当前卡或剩余卡',async()=>{
-  const env=webBatchSetup({deferImages:true});await env.web.InkToCardApp.refresh();
+test('网页取消等待原生准备的批次，不能继续提交当前卡或剩余卡',async()=>{
+  const env=webBatchSetup({deferPrepare:true});await env.web.InkToCardApp.refresh();
   const running=env.web.InkToCardApp.runBatch('notebook');
-  for(let i=0;i<10&&!env.imageCallbacks.length;i++)await new Promise(resolve=>setImmediate(resolve));
-  assert.ok(env.imageCallbacks.length);
-  await env.web.InkToCardApp.cancelBatch();env.imageCallbacks[0]();await running;
+  for(let i=0;i<10&&!env.prepareCallbacks.length;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(env.prepareCallbacks.length);
+  await env.web.InkToCardApp.cancelBatch();env.prepareCallbacks[0]();await running;
   assert.deepEqual(env.writes,[]);assert.ok(!env.calls.includes('applyBatchResult'));
   assert.match(env.elements.get('batch-status').textContent,/已取消/);assert.equal(env.addon.inkBatch,null);
 });
@@ -496,8 +497,8 @@ function uncoloredSetup(create=setup,raw=require('./helpers/handwriting.cjs').ha
   return env;
 }
 
-test('build64黑色图形曲线及布局195支持预览、单卡、自动和批量无彩色改色',()=>{
-  for(const [file,count] of [['mn4-450-build64-marked-curves.wrd',70],['mn4-450-build64-layout195-black.wrd',92]]){
+test('黑色图形曲线、布局195及MN5.0.1布局167支持预览、单卡、自动和批量无彩色改色',()=>{
+  for(const [file,count] of [['mn4-450-build64-marked-curves.wrd',70],['mn4-450-build64-layout195-black.wrd',92],['mn5-501-build1-layout167-black.wrd',421]]){
   const raw=fs.readFileSync(path.resolve(__dirname,'fixtures',file));
   for(const automatic of [false,true]){
     const env=uncoloredSetup(setup,raw),source={noteId:'card',index:1,hash:'drawing:handwriting'};
@@ -518,6 +519,32 @@ test('build64黑色图形曲线及布局195支持预览、单卡、自动和批�
   }
   assert.equal(env.note.colorIndex,5);assert.equal(env.child.colorIndex,5);assert.equal(env.image.colorIndex,0);
   }
+});
+
+test('MN5.0.1布局167样本识别成功，目标为当前色号1时单卡、自动及批量均不重复改色',()=>{
+  const raw=fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-501-build1-layout167-black.wrd'));
+  function prepare(create=setup){
+    const env=uncoloredSetup(create,raw);
+    env.settings=env.context.__INK_TO_CARD_CONFIG__.normalize({...env.settings,mapping:{red:14,uncolored:0}});
+    env.native.saveSettings(env.addon,{noteId:'card',settings:env.settings});return env;
+  }
+  for(const automatic of [false,true]){
+    const env=prepare(),source={noteId:'card',index:1,hash:'drawing:handwriting'};
+    assert.equal(env.commands.readMedia(env.addon,source).drawing.strokeCount,421);
+    const report=env.native.inspectSources(env.addon,{noteId:'card',inspectMedia:true});
+    assert.equal(report.drawingMedia[0].drawingDecoded,true);assert.equal(report.drawingMedia[0].strokeCount,421);
+    const result=env.commands.applyResult(env.addon,env.request({automatic}));
+    assert.equal(result.status,'unchanged');assert.equal(result.color,'uncolored');assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
+  }
+  const env=prepare(batchSetup),job=env.commands.beginBatch(env.addon,{scope:'notebook'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
+    if(item.noteId==='image'){assert.equal(item.skipped,true);continue;}
+    assert.equal(item.skipped,undefined);assert.equal(item.media.drawing.strokeCount,421);
+    const result=env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId,histogram:env.request().histogram});
+    assert.equal(result.status,'unchanged');assert.equal(result.color,'uncolored');
+  }
+  assert.deepEqual(env.writes,[]);assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,0);assert.equal(env.image.colorIndex,0);
 });
 
 test('单卡与自动无彩色书写均须通过原生笔画验证，支持黑灰白且沿用撤销',()=>{
@@ -683,6 +710,8 @@ test('预览不能越过兼容范围授予写入：越界路径标记仍拒绝�
 test('MN5公共头、恢复的真实归档和公共宽度路径标记共用单卡、自动、批量读取与改色入口',()=>{
   const {handwriting}=require('./helpers/handwriting.cjs');
   for(const raw of [fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-500-build5-common20-red.wrd')),
+    fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-500-build5-mixed-extended-heads.wrd')),
+    fs.readFileSync(path.resolve(__dirname,'fixtures/mn5-501-build1-layout131-common24-red.wrd')),
     fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-446-build3-archive.bplist')),
     handwriting([{color:[1,0,0,1],layout:3,pathMarker:1}])]){
     const env=batchSetup();env.context.UIImage.imageWithData=()=>{throw Error('手写归档不应走图片解码');};
@@ -718,5 +747,73 @@ test('损坏或有冲突的最后归档在单卡、自动及批量均拒绝，�
     const job=env.commands.beginBatch(env.addon,{scope:'selected'}),item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position:0});
     assert.equal(item.skipped,true);assert.match(item.reason,/归档/);
     assert.ok(env.mediaReads.every(hash=>hash==='bad-archive'));assert.deepEqual(env.writes,[]);assert.equal(env.note.colorIndex,0);
+  }
+});
+
+test('新入口单卡和自动只使用原生笔迹统计，不采用网页传来的颜色，也不生成图片',()=>{
+  const {handwriting}=require('./helpers/handwriting.cjs');
+  for(const automatic of [false,true])for(const [color,target]of [[[1,0,0,1],3],[[0,0,1,1],2],[[0,0,0,1],7]]){
+    const env=setup(),raw=handwriting([{color}]);
+    env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,mapping:{red:3,blue:2,uncolored:7}}});
+    const state=env.native.snapshot(env.addon);
+    env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+    env.context.__INK_TO_CARD_DRAWING__.media=()=>{throw Error('不应生成SVG');};
+    env.context.__INK_TO_CARD_DRAWING__.preview=()=>{throw Error('不应生成预览');};
+    env.context.UIImage.imageWithData=()=>{throw Error('不应读取图片');};
+    const result=env.commands.recognizeDrawing(env.addon,env.request({automatic,settingsToken:JSON.stringify(state.settings),histogram:{invalid:'不可信网页统计'}}));
+    assert.equal(result.status,'applied');assert.equal(env.note.colorIndex,target);
+  }
+});
+
+test('新入口支持公共头统一规则，单卡、自动、批量共用同一分析结果',()=>{
+  const {handwriting}=require('./helpers/handwriting.cjs');
+  for(const raw of [handwriting([{layout:195,tailLength:16,color:[1,0,0,1]}]),
+    fs.readFileSync(path.join(__dirname,'fixtures/mn5-501-build1-layout131-common24-red.wrd'))]){
+    const env=batchSetup();env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,policy:'red'}});
+    const settingsToken=JSON.stringify(env.native.snapshot(env.addon).settings);
+    env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+    for(const automatic of [false,true]){
+      env.note.colorIndex=0;
+      assert.equal(env.commands.recognizeDrawing(env.addon,env.request({automatic,settingsToken})).status,'applied');
+    }
+    env.note.colorIndex=0;const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    for(let position=0;position<job.total;position++){
+      const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
+      if(item.skipped)continue;
+      assert.equal(item.media.dataURL,undefined);assert.ok(item.media.histogram.counts.red>30);
+      assert.equal(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId,histogram:{invalid:true}}).status,'applied');
+    }
+    assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
+  }
+});
+
+test('新识色流程在切卡、后台、设置变化、手动改色和最后绘图变坏时均保留原色',()=>{
+  for(const change of [
+    env=>{env.notebook.focusNote=null;},env=>{env.addon.inkInactive=true;},env=>{env.note.colorIndex=5;},
+    env=>{env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,mapping:{red:7}}});},
+    env=>{env.note.comments.push({type:'PaintNote',drawing:'bad-last'});},
+    env=>{env.database.getMediaByHash=()=>({length:3,base64Encoding:()=> 'YmFk'});}
+  ]){
+    const env=setup();change(env);
+    assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request()));assert.deepEqual(env.writes,[]);
+  }
+});
+
+test('原始绘图含彩色时，即使面积统计未检出也拒绝套用无彩色映射',()=>{
+  const env=setup(),{handwriting}=require('./helpers/handwriting.cjs');
+  const raw=handwriting([{color:[1,0,0,1],width:0.01,points:[[10,20]]},{color:[0,0,0,1]}]);
+  env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+  env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,mapping:{uncolored:7}}});
+  const result=env.commands.recognizeDrawing(env.addon,env.request({settingsToken:JSON.stringify(env.native.snapshot(env.addon).settings)}));
+  assert.equal(result.status,'insufficient');assert.deepEqual(env.writes,[]);
+});
+
+test('原生分析读取期间来源、设置、卡色或前后台变化时，写入前再次拒绝旧结果',()=>{
+  for(const change of [env=>{env.note.colorIndex=5;},env=>{env.addon.inkInactive=true;},
+    env=>{env.note.comments[1].drawing='changed';},
+    env=>{env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,mapping:{red:7}}});}]){
+    const env=setup(),read=env.database.getMediaByHash;
+    env.database.getMediaByHash=hash=>{const data=read(hash);change(env);return data;};
+    assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request()));assert.deepEqual(env.writes,[]);
   }
 });

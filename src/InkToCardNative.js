@@ -201,8 +201,8 @@ var __INK_TO_CARD_NATIVE__ = (function () {
           var format = prefix.indexOf("iVBORw0KGgo") === 0 ? "PNG" : prefix.indexOf("/9j/") === 0 ? "JPEG"
             : prefix.indexOf("YnBsaXN0MD") === 0 ? "二进制 Property List" : prefix.indexOf("d3Jk") === 0 ? "PencilKit wrd 绘图" : "未知二进制格式";
           if (__INK_TO_CARD_DRAWING__.supports(encoded)) {
-            var preview = __INK_TO_CARD_DRAWING__.media(encoded, bytes);
-            return { index: source.index, bytes: bytes, format: format, drawingDecoded: true, strokeCount: preview.drawing.strokeCount };
+            var decoded = __INK_TO_CARD_DRAWING__.colors(encoded, bytes);
+            return { index: source.index, bytes: bytes, format: format, drawingDecoded: true, strokeCount: decoded.strokes.length };
           }
           var image = typeof UIImage !== "undefined" && typeof UIImage.imageWithData === "function" ? UIImage.imageWithData(data) : null;
           return { index: source.index, bytes: bytes, format: format, imageDecoded: !!image };
@@ -277,6 +277,27 @@ var __INK_TO_CARD_NATIVE__ = (function () {
   }
   function readDrawing(addon, payload) { return drawingMedia(requireNote(addon, payload.noteId), payload); }
   function previewDrawing(addon, payload) { return drawingMedia(requireNote(addon, payload.noteId), payload, true); }
+  function analyzeDrawing(note, payload, options) {
+    var source=latestDrawing(note);
+    if (!source || source.index!==payload.index || source.hash!==payload.hash) throw new Error("最后一条手写绘图已变化，请重新识别");
+    if (!source.hash) throw new Error("最后一条绘图的媒体引用格式不支持，已跳过");
+    var db=database();
+    if (typeof db.getMediaByHash!=="function") throw new Error("当前 MN 不支持读取批注媒体");
+    var data=db.getMediaByHash(source.mediaHash);
+    if (!data) throw new Error("批注媒体尚未下载，请先在 MN 中打开这条批注");
+    var bytes=Number(value(data,"length"));
+    if (!Number.isInteger(bytes) || bytes<3 || bytes>12*1024*1024) throw new Error("绘图媒体长度无效或超过12 MB，已跳过");
+    var encoded=value(data,"base64Encoding");
+    if (!__INK_TO_CARD_DRAWING__.supports(encoded)) throw new Error("最后一条绘图不是已支持的手写笔画格式，已跳过；可导出绘图样本反馈");
+    return __INK_TO_CARD_ANALYSIS__.analyze(encoded,bytes,options);
+  }
+  function recognize(addon,payload) {
+    requireSceneScope(addon,payload);
+    return applyForNote(requireNote(addon,payload.noteId),payload,true,function () {
+      requireSceneScope(addon,payload);
+      return requireNote(addon,payload.noteId);
+    });
+  }
   function exportDrawingSample(addon, payload) {
     var note = requireNote(addon, payload.noteId);
     var candidate = sources(note).find(function (source) { return source.index === payload.index && source.hash === payload.hash && source.kind === "drawing"; });
@@ -320,7 +341,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     requireSceneScope(addon, payload);
     return applyForNote(requireNote(addon, payload.noteId), payload);
   }
-  function applyForNote(note, payload) {
+  function applyForNote(note, payload, directAnalysis, guard) {
     var topic = String(note.notebookId);
     var options = settings(topic);
     if (JSON.stringify(options) !== payload.settingsToken) throw new Error("识别期间设置已变化，请重试");
@@ -328,7 +349,18 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     var source = latestDrawing(note);
     if (!source || !source.hash || source.hash !== payload.hash || source.index !== payload.index) throw new Error("最后一条手写批注已变化，请重新识别");
     if (Number(note.colorIndex) !== payload.expectedColorIndex) throw new Error("识别期间卡片颜色已变化，已保留你的修改");
-    var histogram = payload.histogram;
+    // 新识色流程在原生侧读取完整绘图并统计，不采用网页传入的颜色结论。
+    var analysis = directAnalysis ? analyzeDrawing(note, source, options) : null;
+    if (analysis) {
+      // 媒体读取与分析完成后，再核对会话、来源、设置和用户手动修改。
+      note=guard?guard():database().getNoteById(payload.noteId);
+      if (!note || String(note.notebookId)!==topic) throw new Error("卡片已删除或移动到其他学习集");
+      var currentSource=latestDrawing(note);
+      if (!currentSource || currentSource.hash!==source.hash || currentSource.index!==source.index) throw new Error("最后一条手写批注已变化，请重新识别");
+      if (JSON.stringify(settings(topic))!==payload.settingsToken) throw new Error("识别期间设置已变化，请重试");
+      if (Number(note.colorIndex)!==payload.expectedColorIndex) throw new Error("识别期间卡片颜色已变化，已保留你的修改");
+    }
+    var histogram = analysis ? analysis.histogram : payload.histogram;
     if (!histogram || typeof histogram.pixels !== "number" || !isFinite(histogram.pixels) || histogram.pixels % 1 !== 0 || histogram.pixels <= 0 || histogram.pixels > 1048576
       || typeof histogram.colored !== "number" || !isFinite(histogram.colored) || histogram.colored < 0) throw new Error("识别结果无效");
     var total = 0;
@@ -343,7 +375,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     var result = InkToCardCore.choose(histogram, options);
     if (result.status !== "matched") return result;
     // 写入必须再次通过严格解析；只读预览不能成为任何笔色的写入凭据。
-    var drawing = drawingMedia(note, source).drawing;
+    var drawing = analysis ? analysis.drawing : drawingMedia(note, source).drawing;
     if (result.color === "uncolored") {
       // 原生重新解码同一绘图确认确有笔画，读取失败或仅有图片不能当成已书写。
       if (!drawing || !drawing.strokeCount || !drawing.colors.length) throw new Error("未确认有效手写绘图，保持原色");
@@ -370,7 +402,7 @@ var __INK_TO_CARD_NATIVE__ = (function () {
     return { requested: true };
   }
   return { value: value, list: list, current: current, snapshot: snapshot, saveSettings: saveSettings, openCommunity: openCommunity,
-    media: media, apply: apply, inspectSources: inspectSources,
+    media: media, apply: apply, recognize: recognize, analyzeDrawing: analyzeDrawing, inspectSources: inspectSources,
     exportDrawingSample: exportDrawingSample, readDrawing: readDrawing, previewDrawing: previewDrawing, database: database,
     settings: settings, describeNote: describeNote, latestDrawing: latestDrawing,
     drawingMedia: drawingMedia, applyForNote: applyForNote,

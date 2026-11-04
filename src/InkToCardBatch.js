@@ -45,7 +45,7 @@ var __INK_TO_CARD_BATCH__ = (function () {
       throw new Error(options.policy === "red" ? "请先设置红色对应的卡片色号" : "请先设置笔迹颜色映射");
     }
     var job = { id: "batch-" + Date.now() + "-" + (++serial), topic: topic, ids: ids,
-      settings: options, token: JSON.stringify(options), position: 0, prepared: null };
+      settings: options, token: JSON.stringify(options), directAnalysis: payload.analysisMode === "ink", position: 0, prepared: null };
     addon.inkBatch = job;
     return { batchId: job.id, total: ids.length, settings: options };
   }
@@ -68,7 +68,7 @@ var __INK_TO_CARD_BATCH__ = (function () {
       if (!note || String(note.notebookId) !== job.topic) throw new Error("卡片已删除或移动到其他学习集");
       snapshot = native.describeNote(note);
       if (!snapshot.source) throw new Error("没有可读取的手写绘图");
-      var media = native.drawingMedia(note, snapshot.source);
+      var media = job.directAnalysis ? native.analyzeDrawing(note, snapshot.source, job.settings) : native.drawingMedia(note, snapshot.source);
       requireJob(addon, payload);
       job.prepared = snapshot;
       return { noteId: id, title: snapshot.title, media: media };
@@ -86,8 +86,11 @@ var __INK_TO_CARD_BATCH__ = (function () {
       var note = native.database().getNoteById(snapshot.noteId);
       if (!note || String(note.notebookId) !== job.topic) throw new Error("卡片已删除或移动到其他学习集");
       return native.applyForNote(note, { noteId: snapshot.noteId, index: snapshot.source.index, hash: snapshot.source.hash,
-        settingsToken: job.token, expectedColorIndex: snapshot.colorIndex, automatic: false, histogram: payload.histogram });
-    } catch (error) { return { status: "skipped", reason: String(error.message || error) }; }
+        settingsToken: job.token, expectedColorIndex: snapshot.colorIndex, automatic: false, histogram: payload.histogram }, job.directAnalysis, function () {
+          requireJob(addon,payload);
+          return native.database().getNoteById(snapshot.noteId);
+        });
+    } catch (error) { requireJob(addon,payload); return { status: "skipped", reason: String(error.message || error) }; }
   }
   function end(addon, payload) {
     if (addon.inkBatch && addon.inkBatch.id === payload.batchId) addon.inkBatch = null;

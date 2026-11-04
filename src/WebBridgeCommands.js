@@ -14,6 +14,7 @@ var __INK_TO_CARD_COMMANDS__ = (function () {
     prepareBatchCard: function (addon, payload) { return __INK_TO_CARD_BATCH__.prepare(addon, payload); },
     applyBatchResult: function (addon, payload) { return __INK_TO_CARD_BATCH__.apply(addon, payload); },
     endBatch: function (addon, payload) { return __INK_TO_CARD_BATCH__.end(addon, payload); },
-    applyResult: function (addon, payload) { return native.apply(addon, payload); }
+    applyResult: function (addon, payload) { return native.apply(addon, payload); },
+    recognizeDrawing: function (addon, payload) { return native.recognize(addon, payload); }
   };
 })();

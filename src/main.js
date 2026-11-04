@@ -1,6 +1,7 @@
 JSB.require("InkToCardConfig");
 JSB.require("InkToCardCore");
 JSB.require("InkToCardDrawing");
+JSB.require("InkToCardAnalysis");
 JSB.require("InkToCardNative");
 JSB.require("InkToCardBatch");
 JSB.require("WebBridgeCommands");

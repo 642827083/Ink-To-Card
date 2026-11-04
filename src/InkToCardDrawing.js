@@ -87,12 +87,12 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     var count = one(records, 3, 0), flags = one(records, 4, 0), raw = one(records, 7, 2), common = one(records, 6, 2);
     budget.count += count;
     if (count < 1 || budget.count > MAX_POINTS || raw.length % count) fail("笔画点数或长度无效");
-    var layout = channelLayout(flags, raw.length / count, common.length);
+    var layout = channelLayout(flags, raw.length / count, common.length, budget.colorAnalysis);
     if (marker > 0) {
       // 路径标记与通道组合无关；保留范围内的标记，不删减、裁剪或重排控制点。
       var compatible = marker < count;
       if (!compatible) {
-        if (!budget.previewOnly) fail("笔画路径含未验证标记；请点击预览核对，暂不支持改色");
+        if (!budget.previewOnly) fail("笔画路径含未验证标记；已保留原色，请导出绘图样本反馈");
         budget.unverifiedPathMarkers = true;
       }
       budget.pathMarkers.push({ strokeIndex: budget.strokeIndex, value: marker });
@@ -111,7 +111,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     }
     return result;
   }
-  function channelLayout(flags, stride, commonLength) {
+  function channelLayout(flags, stride, commonLength, colorAnalysis) {
     // 已核对的通道按位组合：XY 为 8 字节，随后两项各 4 字节，最后三项各 2 字节。
     // 标志决定数据在逐点区还是公共头，不能用逐点区的总长度猜笔宽偏移。
     if (flags > 255 || !(flags & 1) || (flags & ~231)) fail("笔画通道布局变化：含未知通道或缺少坐标");
@@ -124,14 +124,16 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     });
     // 新旧公共头的固定尾部分别为 12、10 字节；旧头仅对已确认的逐点笔宽规则启用。
     var expected = commonOffset + 12, legacy = layout.pointWidth !== null && commonLength === commonOffset + 10;
-    // MN5.0/build5 实样的布局39公共头为20字节；坐标和笔宽均来自逐点区，不读取该扩展头中的附加字节。
-    // 仅接受已核对的这一组合，不能推定其他通道的公共笔宽偏移或头长度也相同。
-    var extended = flags === 39 && commonLength === 20;
+    // MN5.0及5.0.1实样的布局39/103/167/231公共头分别为20/18/18/16字节，固定尾部均为16字节。
+    // 上述四种布局的笔宽来自逐点区；MN5.0.1实样的131布局公共头为24字节，笔宽仍在公共区偏移0。
+    // 仅为已核对的131布局补充16字节尾部，不推定其他通道的头长度或公共笔宽偏移。
+    // 识色入口按完整通道前缀校验坐标和笔宽，统一接受已知16字节尾部；不依赖尾部内容生成预览。
+    var extended = (colorAnalysis === true || flags === 39 || flags === 103 || flags === 167 || flags === 231 || flags === 131) && commonLength === commonOffset + 16;
     if (stride !== pointOffset || (commonLength !== expected && !legacy && !extended)) fail("笔画通道布局变化：通道与数据长度不一致");
     layout.stride = pointOffset;
     return layout;
   }
-  function wrd(bytes, previewOnly, compatibility) {
+  function wrd(bytes, previewOnly, compatibility, colorAnalysis) {
     if (!(bytes instanceof Uint8Array) || bytes.length < 3 || bytes.length > MAX_BYTES
       || bytes[0] !== 119 || bytes[1] !== 114 || bytes[2] !== 100) fail("缺少 wrd 标记");
     var records = fields(bytes.subarray(3)), rootTypes = { 1: 0, 2: 2, 3: 2, 4: 2, 5: 2, 7: 2, 8: 2, 30: 0 };
@@ -141,7 +143,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       || (compatibility && one(records, 46, 0, true) > 0)) fail("绘图版本变化");
     var inks = records.filter(function (record) { return record.number === 4; });
     var strokes = records.filter(function (record) { return record.number === 5; });
-    var budget = { count: 0, previewOnly: previewOnly === true, pathMarkers: [], unverifiedPathMarkers: false, strokeIndex: 0 };
+    var budget = { count: 0, previewOnly: previewOnly === true, colorAnalysis: colorAnalysis === true, pathMarkers: [], unverifiedPathMarkers: false, strokeIndex: 0 };
     if (!inks.length || inks.length > 64 || !strokes.length || strokes.length > MAX_STROKES) fail("笔色或笔画数量超出范围");
     inks = inks.map(function (record) { return ink(record.value, compatibility); });
     strokes = strokes.map(function (record, strokeIndex) {
@@ -283,16 +285,16 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     });
     return root;
   }
-  function decode(bytes, previewOnly) {
+  function decode(bytes, previewOnly, colorAnalysis) {
     if (!(bytes instanceof Uint8Array) || bytes.length > MAX_BYTES) fail("原始数据类型或长度无效");
-    if (!hasHeader(bytes, "bplist")) return wrd(bytes, previewOnly, false);
+    if (!hasHeader(bytes, "bplist")) return wrd(bytes, previewOnly, false, colorAnalysis);
     if (!hasHeader(bytes, "bplist00")) fail("归档版本不支持");
     var variants = archiveVariants(bytes), selected = variants.drawing1 ? "drawing1" : "drawing2";
-    var drawing = wrd(variants[selected], previewOnly, false);
+    var drawing = wrd(variants[selected], previewOnly, false, colorAnalysis);
     drawing.archive = { selected: selected };
     if (variants.drawing1 && variants.drawing2) {
       var alternative;
-      try { alternative = wrd(variants.drawing2, previewOnly, true); }
+      try { alternative = wrd(variants.drawing2, previewOnly, true, colorAnalysis); }
       catch (error) { fail("归档的另一个绘图版本无法核对：" + error.message); }
       // 同档的两个名字是兼容表示，不能相加或挑一个能读的就跳过另一个。
       // 忽略身份和边界等元数据差别；颜色、透明度、全部路径与变换后的笔宽必须一致。
@@ -342,5 +344,6 @@ var __INK_TO_CARD_DRAWING__ = (function () {
   function supports(encoded) {
     return typeof encoded === "string" && (encoded.indexOf("d3Jk") === 0 || encoded.indexOf("YnBsaXN0MD") === 0);
   }
-  return { supports: supports, decodeBase64: decodeBase64, decode: decode, render: render, media: media, preview: preview };
+  function colors(encoded, length) { return decode(decodeBase64(encoded, length), false, true); }
+  return { supports: supports, decodeBase64: decodeBase64, decode: decode, colors: colors, render: render, media: media, preview: preview };
 })();

@@ -191,7 +191,7 @@ test('业务脚本加载失败时显示文件名，并阻止未初始化的操�
   await page.start();
   assert.equal(page.elements.get('note-title').textContent, '插件启动失败');
   assert.match(page.elements.get('status').textContent, /脚本无法加载：app.js/);
-  assert.equal(page.elements.get('preview').disabled, true);
+  assert.equal(page.elements.get('recognize').disabled, true);
   assert.equal(page.timers.size, 0);
 });
 
@@ -206,20 +206,20 @@ test('未捕获的页面初始化异常显示原因', async () => {
 });
 
 test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选中仍跟踪，稳定后自动及手动改色', async () => {
- for(const sample of ['mn4-450-build62-path9-94-strokes.wrd','mn5-500-build5-common20-red.wrd',null]){
-  const uncolored=sample===null;
+ for(const sample of ['mn4-450-build62-path9-94-strokes.wrd','mn5-500-build5-common20-red.wrd','mn5-500-build5-mixed-extended-heads.wrd','mn5-501-build1-layout167-black.wrd','mn5-501-build1-layout131-common24-red.wrd',null]){
+  const uncolored=sample===null||sample==='mn5-501-build1-layout167-black.wrd';
   const storage=new Map(),calls=[],mediaReads=[];
   const note={noteId:'A',notebookId:'topic',noteTitle:'跟踪卡片A',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-A'}]},
     other={noteId:'B',notebookId:'topic',noteTitle:'卡片B',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-B'}]};
   const notebook={notebookId:'topic',focusNote:note,mindmapView:{selViewLst:[{note}]}},addon={window:{},inkClassicTracking:true,inkSceneEpoch:1,inkNotebookOpen:true};
-  const raw=uncolored?require('./helpers/handwriting.cjs').handwriting([{pathMarker:1}]):fs.readFileSync(path.resolve(__dirname,'fixtures',sample));
+  const raw=sample===null?require('./helpers/handwriting.cjs').handwriting([{pathMarker:1}]):fs.readFileSync(path.resolve(__dirname,'fixtures',sample));
   const native=vm.createContext({
     NSUserDefaults:{standardUserDefaults:()=>({objectForKey:key=>storage.get(key),setObjectForKey:(value,key)=>storage.set(key,value)})},
     Database:{sharedInstance:()=>({getNoteById:id=>id==='A'?note:id==='B'?other:null,getMediaByHash:hash=>{mediaReads.push(hash);return {length:raw.length,base64Encoding:()=>raw.toString('base64')};}})},
     Application:{sharedInstance:()=>({studyController:()=>({notebookController:notebook}),refreshAfterDBChanged(){}})},
     UndoManager:{sharedInstance:()=>({undoGrouping:(title,topic,fn)=>fn()})}
   });
-  for(const file of ['InkToCardConfig','InkToCardCore','InkToCardDrawing','InkToCardNative','InkToCardBatch','WebBridgeCommands'])
+  for(const file of ['InkToCardConfig','InkToCardCore','InkToCardDrawing','InkToCardAnalysis','InkToCardNative','InkToCardBatch','WebBridgeCommands'])
     vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../src/'+file+'.js'),'utf8'),native);
   storage.set('cn.marginnote.ink-to-card.settings.topic',JSON.stringify({auto:true,policy:'red',mapping:uncolored?{uncolored:7}:{red:7}}));
   const rgba=new Uint8ClampedArray(100*100*4);for(let i=0;i<100;i++)rgba.set(uncolored?[0,0,0,255]:[255,0,0,255],i*4);
@@ -241,7 +241,7 @@ test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选�
   await page.advance(299);await page.context.InkToCardApp.tick();assert.equal(note.colorIndex,0,'媒体变化重新等待稳定');
   await page.advance(1);await page.context.InkToCardApp.tick();
   assert.equal(note.colorIndex,7);assert.equal(other.colorIndex,0);
-  assert.deepEqual(mediaReads,['ink-A-saved','ink-A-saved']);assert.match(page.elements.get('status').textContent,/卡片色号 8/);
+  assert.deepEqual(mediaReads,['ink-A-saved']);assert.match(page.elements.get('status').textContent,/卡片色号 8/);
   assert.match(page.elements.get('status').textContent,uncolored?/无彩色书写 → 已设置卡片色号 8/:/红色笔迹 → 已设置卡片色号 8/);
   assert.equal(page.elements.get('status').className,'success');
   assert.equal(page.elements.get('tracking-status').textContent,'跟踪中');
@@ -253,7 +253,7 @@ test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选�
   notebook.mindmapView.selViewLst=[];await page.advance(300);await page.context.InkToCardApp.tick();
   assert.equal(other.colorIndex,7);assert.equal(note.colorIndex,0);
   assert.equal(page.elements.get('note-title').textContent,'卡片B');
-  assert.equal(calls.filter(command=>command==='applyResult').length,uncolored?3:2);
+  assert.equal(calls.filter(command=>command==='recognizeDrawing').length,uncolored?3:2);
   assert.equal(page.timers.size,0);
  }
 });
@@ -280,76 +280,15 @@ test('经典安装包即使宿主提供 mn 对象，仍使用经典 iframe 桥�
   assert.equal(page.elements.get('note-title').textContent,'请先选一张卡片');
 });
 
-
-function previewPage(options={}){
-  const raw=options.unverified?require('./helpers/handwriting.cjs').handwriting([{pathMarker:2}]):fs.readFileSync(path.resolve(__dirname,'fixtures/mn4-450-build62-path9-black-red.wrd'));
-  const decoder=vm.createContext({});vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../src/InkToCardDrawing.js'),'utf8'),decoder);
-  const media=decoder.__INK_TO_CARD_DRAWING__.preview(raw.toString('base64'),raw.length),calls=[],images=[];
-  let currentId='A',currentHash='drawing:marked';
-  const page=packagedPage({virtualClock:true,Image:class {set src(value){images.push(this);if(!options.deferImages)queueMicrotask(()=>options.imageError?this.onerror():this.onload());}},
-    onBridge(address,context){
-      const request=JSON.parse(decodeURIComponent(address.split('payload=')[1]));calls.push(request.command);
-      const snapshot={available:true,noteId:currentId,title:'试验卡'+currentId,colorIndex:0,topicId:'topic',settings:context.__INK_TO_CARD_CONFIG__.normalize({}),
-        source:{index:0,hash:currentHash,kind:'drawing'},sources:[{index:0,hash:currentHash,kind:'drawing'}]};
-      if(request.command==='readPreview'&&options.bridgeError){context.InkToCardReceive({requestId:request.requestId,error:'媒体尚未下载'});return;}
-      context.InkToCardReceive({requestId:request.requestId,payload:request.command==='readCurrent'?snapshot:media});
-    }
-  });
-  return {...page,calls,images,setCurrent:id=>{currentId=id;},setDrawing:hash=>{currentHash=hash;}};
-}
-
-test('预览再次点击可收起，重开复用图片，绘图变化后重新生成',async()=>{
-  const page=previewPage();await page.start();
-  const click=page.elements.get('preview').handlers.get('click');
-  await click();assert.equal(page.elements.get('preview-wrap').hidden,false);
-  await click();assert.equal(page.elements.get('preview-wrap').hidden,true,'再次点击应收起图片');
-  assert.equal(page.elements.get('preview').textContent,'预览');
-  assert.equal(page.elements.get('preview')['aria-expanded'],'false');
-  await click();assert.equal(page.elements.get('preview-wrap').hidden,false);
-  assert.equal(page.elements.get('preview').textContent,'收起');
-  assert.equal(page.elements.get('preview')['aria-expanded'],'true');
-  assert.equal(page.calls.filter(x=>x==='readPreview').length,1,'同一绘图重开不重复读取媒体');
-  assert.equal(page.images.length,1,'同一绘图重开不重新加载图片');
-  await click();page.setDrawing('drawing:changed');await click();
-  assert.equal(page.calls.filter(x=>x==='readPreview').length,2,'绘图变化后重新生成');
-  assert.equal(page.elements.get('preview-wrap').hidden,false);
+test('安装包移除预览界面与浏览器图像识色，保留检查来源和样本导出',async()=>{
+  const page=packagedPage();
+  const html=page.entries.find(e=>e.name==='web/index.html').data.toString();
+  const app=page.entries.find(e=>e.name==='web/src/app.js').data.toString();
+  assert.doesNotMatch(html,/id="preview/);assert.doesNotMatch(app,/new Image|drawImage|getImageData|readPreview|readMedia/);
+  assert.match(app,/recognizeDrawing/);assert.ok(page.elements.has('inspect-sources'));assert.ok(page.elements.has('export-sample'));
+  assert.ok(page.entries.find(e=>e.name==='InkToCardAnalysis.js'));
 });
 
-test('已核对绘图预览显示加载状态与正常说明，不再标为试验只读',async()=>{
-  const page=previewPage({deferImages:true});await page.start();
-  const loading=page.elements.get('preview').handlers.get('click')();await page.advance(0);
-  assert.equal(page.elements.get('preview').textContent,'生成中…');assert.equal(page.elements.get('preview').disabled,true);
-  assert.equal(page.elements.get('preview-wrap').hidden,true);assert.equal(page.elements.get('status').textContent,'正在生成预览…');
-  page.images[0].onload();await loading;
-  assert.equal(page.elements.get('preview-wrap').hidden,false);assert.equal(page.elements.get('preview').textContent,'收起');
-  assert.equal(page.elements.get('preview-note').textContent,'预览为近似渲染。');
-  assert.match(page.elements.get('status').textContent,/预览已生成，2 条笔画/);
-  assert.deepEqual(page.calls,['readCurrent','readCurrent','readPreview','readCurrent']);assert.equal(page.timers.size,0);
-});
-
-test('超出已核对范围的路径标记仍在预览旁明确标为只读试验',async()=>{
-  const page=previewPage({unverified:true});await page.start();await page.elements.get('preview').handlers.get('click')();
-  assert.match(page.elements.get('preview-note').textContent,/试验预览.*暂不参与单卡、自动及批量改色/);
-  assert.doesNotMatch(page.elements.get('status').textContent,/试验预览/,'顶部不重复预览旁的长说明');
-  assert.match(page.elements.get('status').textContent,/1 条笔画/);
-  assert.deepEqual(page.calls,['readCurrent','readCurrent','readPreview','readCurrent']);
-});
-
-test('放大预览可关闭、键盘返回，并在跟踪卡片变化后清除',async()=>{
-  const page=previewPage();await page.start();await page.elements.get('preview').handlers.get('click')();
-  page.elements.get('preview-zoom').handlers.get('click')();
-  assert.equal(page.elements.get('preview-dialog').hidden,false);
-  assert.equal(page.elements.get('preview-large-image').src,page.elements.get('preview-image').src);
-  assert.equal(page.context.document.activeElement,page.elements.get('preview-close'));
-  page.keydown('Tab');assert.equal(page.context.document.activeElement,page.elements.get('preview-close'));
-  page.keydown('Escape');assert.equal(page.elements.get('preview-dialog').hidden,true);
-  assert.equal(page.context.document.activeElement,page.elements.get('preview-zoom'));
-  page.elements.get('preview-zoom').handlers.get('click')();
-  page.setCurrent('B');await page.context.InkToCardApp.refresh();
-  assert.equal(page.elements.get('preview-dialog').hidden,true);
-  assert.equal(page.elements.get('preview-wrap').hidden,true);
-  assert.equal(page.elements.get('preview-large-image').src,undefined);
-});
 
 test('面板反馈区分等待选卡、缺少映射、等待手写，并随学习集刷新摘要',async()=>{
   let snapshot={available:false,topicId:'topic',tracking:true,reason:'请先选一张卡片'};
@@ -371,23 +310,4 @@ test('面板反馈区分等待选卡、缺少映射、等待手写，并随学�
   assert.equal(page.elements.get('tracking-status').textContent,'等待手写');
   assert.equal(page.elements.get('recognize').disabled,true);
   assert.match(page.elements.get('status').textContent,/没有可读取的手写绘图/);
-});
-
-test('媒体读取失败或浏览器图片显示失败时，预览明确报错并可重试',async()=>{
-  for(const options of [{bridgeError:true},{imageError:true}]){
-    const page=previewPage(options);await page.start();await page.elements.get('preview').handlers.get('click')();
-    assert.match(page.elements.get('status').textContent,options.bridgeError?/预览失败：媒体尚未下载/:/预览失败：预览图片无法显示/);
-    assert.equal(page.elements.get('preview-wrap').hidden,true);assert.equal(page.elements.get('preview').textContent,'预览');
-    assert.equal(page.elements.get('preview').disabled,false);assert.equal(page.timers.size,0);
-  }
-});
-
-test('图片加载无响应会超时报错；加载期间换卡不显示旧卡预览',async()=>{
-  const timeout=previewPage({deferImages:true});await timeout.start();
-  const waiting=timeout.elements.get('preview').handlers.get('click')();await timeout.advance(15000);await waiting;
-  assert.match(timeout.elements.get('status').textContent,/预览失败：预览图片加载超时/);assert.equal(timeout.elements.get('preview').disabled,false);
-  const changed=previewPage({deferImages:true});await changed.start();
-  const loading=changed.elements.get('preview').handlers.get('click')();await changed.advance(0);
-  changed.setCurrent('B');changed.images[0].onload();await loading;
-  assert.equal(changed.elements.get('preview-wrap').hidden,true);assert.match(changed.elements.get('status').textContent,/卡片或绘图已变化/);
 });

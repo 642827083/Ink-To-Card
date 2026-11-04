@@ -2,7 +2,6 @@ var InkToCardApp = (function () {
   var config = __INK_TO_CARD_CONFIG__, state = null, rendered = "", busy = false, saving = false, polling = false;
   var observation = "", observedAt = 0, attempted = new Map(), lastAuto = false, diagnosing = false, batch = null;
   var waitingForInk = false, trackingError = false, resultTarget = null;
-  var previewCache = null, previewLoading = false;
   function element(id) { return document.getElementById(id); }
   function controlState(control, available, pending) {
     control.disabled = !available || !!pending;
@@ -17,7 +16,6 @@ var InkToCardApp = (function () {
     var configurable = !!(state && (available || state.tracking && state.topicId));
     configurationEnabled(configurable, !idle);
     controlState(element("dominance"), configurable && state.settings.policy === "dominant", !idle);
-    controlState(element("preview"), available && state.source, !idle);
     controlState(element("recognize"), available && state.source, !idle);
     controlState(element("inspect-sources"), available, !idle || diagnosing);
     controlState(element("export-sample"), available && state.source, !idle);
@@ -25,7 +23,6 @@ var InkToCardApp = (function () {
     controlState(element("batch-notebook"), state && state.topicId, !idle);
     element("batch-cancel").hidden = !batch;
     element("batch-cancel").disabled = !!(batch && batch.cancelled);
-    previewButton();
     trackingStatus();
   }
   function status(message, error, success) { element("status").textContent = message; element("status").className = error ? "error" : success ? "success" : ""; }
@@ -60,36 +57,6 @@ var InkToCardApp = (function () {
     }).join("；") : "尚未启用颜色映射";
     element("rules-summary").textContent = settings.policy === "red" ? "有红色就设为红色" : settings.policy === "priority" ? "按颜色优先级" : "主要颜色 · 占比 " + Math.round(settings.dominance * 100) + "%";
   }
-  function closePreview(restoreFocus) {
-    var opened = !element("preview-dialog").hidden;
-    element("preview-dialog").hidden = true;
-    element("preview-large-image").removeAttribute("src");
-    element("panel-content").removeAttribute("aria-hidden");
-    document.body.className = "";
-    if (opened && restoreFocus && typeof element("preview-zoom").focus === "function") element("preview-zoom").focus();
-  }
-  function zoomPreview() {
-    if (element("preview-wrap").hidden) return;
-    element("preview-large-image").src = element("preview-image").src;
-    element("preview-large-note").textContent = element("preview-note").textContent;
-    element("preview-dialog").hidden = false;
-    element("panel-content").setAttribute("aria-hidden", "true");
-    document.body.className = "preview-open";
-    element("preview-close").focus();
-  }
-  function previewButton() {
-    var opened = !element("preview-wrap").hidden;
-    element("preview").textContent = previewLoading ? "生成中…" : opened ? "收起" : "预览";
-    element("preview").setAttribute("aria-expanded", String(opened));
-  }
-  function previewOpen(opened) {
-    if (!opened) closePreview(false);
-    element("preview-wrap").hidden = !opened;
-    previewButton();
-  }
-  function previewKey(source, scopeToken) {
-    return JSON.stringify([scopeToken, source.noteId, source.index, source.hash]);
-  }
   function showCounts(counts) {
     var box = element("counts"); box.replaceChildren(); box.hidden = !counts;
     if (!counts) return;
@@ -120,8 +87,6 @@ var InkToCardApp = (function () {
     if (changedSource) element("source-diagnostic").hidden = true;
     element("source").textContent = snapshot.source ? "最后一条手写绘图 · 批注 " + (snapshot.source.index + 1) : "未找到手写绘图";
     if (changedSource) {
-      previewCache = null; previewOpen(false);
-      element("preview-image").removeAttribute("src"); element("preview-note").textContent = "";
       showCounts(null);
     }
     if (changedSettings) showCounts(null);
@@ -169,35 +134,8 @@ var InkToCardApp = (function () {
   function selected() {
     if (!state || !state.available) throw new Error("请在脑图中选中一张卡片，再点击刷新");
     var source = state.source;
-    if (!source) throw new Error("没有可预览的手写绘图");
+    if (!source) throw new Error("没有可读取的手写绘图");
     return { noteId: state.noteId, index: source.index, hash: source.hash };
-  }
-  async function preview() {
-    if (busy || saving) return;
-    if (!element("preview-wrap").hidden) { previewOpen(false); status("预览已收起。"); return; }
-    busy = true; previewLoading = true; controls();
-    try {
-      // 重开前核对当前媒体引用，复用未变化的图片；不重新读取或解码媒体。
-      render(await MNBridge.send("readCurrent"));
-      var source = selected(), scope = state.scopeToken, key = previewKey(source, scope);
-      if (previewCache === key) { previewOpen(true); status("预览已展开，点击图片可放大。"); return; }
-      previewCache = null; element("preview-image").removeAttribute("src");
-      element("preview-note").textContent = "";
-      status("正在生成预览…");
-      var media = await MNBridge.send("readPreview", source);
-      await loadImage(media.dataURL);
-      var latest = await MNBridge.send("readCurrent"); render(latest);
-      if (!latest.available || latest.scopeToken !== scope || latest.noteId !== source.noteId || !latest.source || latest.source.hash !== source.hash || latest.source.index !== source.index) {
-        throw new Error("卡片或绘图已变化，请重新预览");
-      }
-      previewCache = key; element("preview-image").src = media.dataURL; previewOpen(true);
-      var note = media.drawing && media.drawing.previewOnly
-        ? "试验预览：请与 MN 中的笔迹核对是否缺笔、连线或保留了已擦除部分。这类绘图暂不参与单卡、自动及批量改色。"
-        : "预览为近似渲染。";
-      element("preview-note").textContent = note;
-      status("预览已生成" + (media.drawing ? "，" + media.drawing.strokeCount + " 条笔画" : "") + "。点击图片可放大。");
-    } catch (error) { status("预览失败：" + error.message, true); }
-    finally { busy = false; previewLoading = false; controls(); }
   }
   async function inspectSources() {
     if (!state || !state.available || busy || diagnosing || InkToCardStartup.failed()) return;
@@ -237,51 +175,15 @@ var InkToCardApp = (function () {
       controls();
     }
   }
-  function pixels(dataURL) {
-    return new Promise(function (resolve, reject) {
-      var image = new Image();
-      image.onerror = function () { reject(new Error("这条批注无法解码成图片")); };
-      image.onload = function () {
-        try {
-          var scale = Math.min(1, 1024 / Math.max(image.naturalWidth, image.naturalHeight));
-          var canvas = document.createElement("canvas");
-          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-          var context = canvas.getContext("2d", { willReadFrequently: true });
-          context.drawImage(image, 0, 0, canvas.width, canvas.height);
-          resolve({ data: context.getImageData(0, 0, canvas.width, canvas.height).data, width: canvas.width, height: canvas.height });
-        } catch (error) { reject(error); }
-      };
-      image.src = dataURL;
-    });
-  }
-  function loadImage(dataURL) {
-    return new Promise(function (resolve, reject) {
-      var image = new Image(), finished = false;
-      function finish(error) {
-        if (finished) return;
-        finished = true; clearTimeout(timer);
-        image.onload = null; image.onerror = null;
-        if (error) reject(error); else resolve();
-      }
-      var timer = setTimeout(function () { finish(new Error("预览图片加载超时，请重试")); }, 15000);
-      image.onload = function () { finish(); };
-      image.onerror = function () { finish(new Error("预览图片无法显示")); };
-      image.src = dataURL;
-    });
-  }
   async function recognize(snapshot, automatic, valid) {
     if (busy || saving || !snapshot || !snapshot.source) return false;
     busy = true; waitingForInk = false; trackingError = false; controls();
     try {
       status(automatic ? "正在自动识别…" : "正在识别笔迹颜色…");
       var source = snapshot.source, settingsToken = JSON.stringify(snapshot.settings);
-      var media = await MNBridge.send("readMedia", { noteId: snapshot.noteId, index: source.index, hash: source.hash });
-      var image = await pixels(media.dataURL);
-      var histogram = InkToCardCore.histogram(image.data, image.width, image.height, snapshot.settings);
       if (valid && !valid()) return true;
-      var result = await MNBridge.send("applyResult", { noteId: snapshot.noteId, index: source.index, hash: source.hash,
-        settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, histogram: histogram, scopeToken: snapshot.scopeToken });
+      var result = await MNBridge.send("recognizeDrawing", { noteId: snapshot.noteId, index: source.index, hash: source.hash,
+        settingsToken: settingsToken, expectedColorIndex: snapshot.colorIndex, automatic: automatic, scopeToken: snapshot.scopeToken });
       showCounts(result.counts);
       var color = config.mappingEntries.find(function (item) { return item.id === result.color; });
       var label = color ? color.label + (result.color === "uncolored" ? "" : "笔迹") : "";
@@ -303,26 +205,14 @@ var InkToCardApp = (function () {
     function progress(message) { element("batch-status").textContent = message; }
     try {
       progress("正在读取批量范围…");
-      var job = await MNBridge.send("beginBatch", { scope: scope });
+      var job = await MNBridge.send("beginBatch", { scope: scope, analysisMode: "ink" });
       active.id = job.batchId;
       for (var position = 0; position < job.total && !active.cancelled; position += 1) {
         progress("正在处理 " + (position + 1) + " / " + job.total);
-        var item = await MNBridge.send("prepareBatchCard", { batchId: job.batchId, position: position }), result, histogram = null;
+        var item = await MNBridge.send("prepareBatchCard", { batchId: job.batchId, position: position }), result;
         if (active.cancelled) break;
         if (item.skipped) result = { status: "skipped", reason: item.reason };
-        else {
-          try {
-            var image = await pixels(item.media.dataURL);
-            if (active.cancelled) break;
-            histogram = InkToCardCore.histogram(image.data, image.width, image.height, job.settings);
-            result = await MNBridge.send("applyBatchResult", { batchId: job.batchId, noteId: item.noteId, histogram: histogram });
-          } catch (error) {
-            if (active.cancelled) break;
-            // 图像分析失败可以跳过；原生任务失效须停止整批，不能继续提交。
-            if (histogram) throw error;
-            result = { status: "skipped", reason: error.message };
-          }
-        }
+        else result = await MNBridge.send("applyBatchResult", { batchId: job.batchId, noteId: item.noteId });
         done += 1;
         if (result.status === "applied") changed += 1;
         else if (result.status === "unchanged") unchanged += 1;
@@ -395,16 +285,6 @@ var InkToCardApp = (function () {
     });
     ["auto", "policy", "min-pixels", "dominance"].forEach(function (id) { element(id).addEventListener("change", save); });
     element("refresh").addEventListener("click", refresh);
-    element("preview").addEventListener("click", preview);
-    element("preview-zoom").addEventListener("click", zoomPreview);
-    element("preview-close").addEventListener("click", function () { closePreview(true); });
-    element("preview-dialog").addEventListener("click", function (event) { if (event.target === element("preview-dialog")) closePreview(true); });
-    document.addEventListener("keydown", function (event) {
-      if (element("preview-dialog").hidden) return;
-      if (event.key === "Escape") { event.preventDefault(); closePreview(true); }
-      // 放大预览只有一个按钮，键盘焦点保持在关闭按钮，避免进入被遮住的面板。
-      if (event.key === "Tab") { event.preventDefault(); element("preview-close").focus(); }
-    });
     element("inspect-sources").addEventListener("click", inspectSources);
     element("export-sample").addEventListener("click", exportDrawingSample);
     element("open-community").addEventListener("click", async function () {
