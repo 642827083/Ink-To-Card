@@ -205,9 +205,10 @@ test('未捕获的页面初始化异常显示原因', async () => {
   assert.equal(page.context.document.body.children.length, 0);
 });
 
-test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选中仍跟踪，稳定后自动及手动改色', async () => {
- for(const sample of ['mn4-450-build62-path9-94-strokes.wrd','mn5-500-build5-common20-red.wrd','mn5-500-build5-mixed-extended-heads.wrd','mn5-501-build1-layout167-black.wrd','mn5-501-build1-layout131-common24-red.wrd',null]){
-  const uncolored=sample===null||sample==='mn5-501-build1-layout167-black.wrd';
+test('经典安装包自动及手动识别仅统计普通笔，取消选中仍跟踪，只有马克笔明确跳过', async () => {
+ for(const sample of ['mn4-450-build62-path9-94-strokes.wrd','mn5-500-build5-common20-red.wrd','mn5-500-build5-mixed-extended-heads.wrd','mn5-501-build1-layout167-black.wrd','mn5-501-build1-layout131-common24-red.wrd','mn5-500-build5-fixed-width-black-red.wrd','mn5-502-build2-fixed-width-black.bplist','mn5-502-build2-mixed-pen-marker-red.bplist','mn5-510-build7-marker-only.wrd',null]){
+  const markerOnly=sample==='mn5-510-build7-marker-only.wrd';
+  const uncolored=markerOnly||sample===null||['mn5-501-build1-layout167-black.wrd','mn5-502-build2-fixed-width-black.bplist'].includes(sample);
   const storage=new Map(),calls=[],mediaReads=[];
   const note={noteId:'A',notebookId:'topic',noteTitle:'跟踪卡片A',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-A'}]},
     other={noteId:'B',notebookId:'topic',noteTitle:'卡片B',colorIndex:0,comments:[{type:'PaintNote',drawing:'ink-B'}]};
@@ -240,6 +241,18 @@ test('经典安装包彩色、MN5真实公共头与无彩色书写：取消选�
   note.comments[0].drawing='ink-A-saved';await page.context.InkToCardApp.tick();
   await page.advance(299);await page.context.InkToCardApp.tick();assert.equal(note.colorIndex,0,'媒体变化重新等待稳定');
   await page.advance(1);await page.context.InkToCardApp.tick();
+  if(markerOnly){
+    assert.equal(note.colorIndex,0);assert.match(page.elements.get('status').textContent,/已排除马克笔.*未检测到普通笔/);
+    assert.equal(page.elements.get('tracking-status').textContent,'跟踪中');
+    await page.advance(1000);await page.context.InkToCardApp.tick();
+    assert.equal(calls.filter(command=>command==='recognizeDrawing').length,1,'只有马克笔不会反复重试');
+    await page.elements.get('recognize').handlers.get('click')();assert.equal(note.colorIndex,0);
+    assert.match(page.elements.get('status').textContent,/已排除马克笔/);
+    notebook.mindmapView.selViewLst=[{note:other}];await page.context.InkToCardApp.tick();
+    notebook.mindmapView.selViewLst=[];await page.advance(300);await page.context.InkToCardApp.tick();
+    assert.equal(other.colorIndex,0);assert.equal(calls.filter(command=>command==='recognizeDrawing').length,3);
+    assert.deepEqual(page.errors,[]);assert.equal(page.timers.size,0);continue;
+  }
   assert.equal(note.colorIndex,7);assert.equal(other.colorIndex,0);
   assert.deepEqual(mediaReads,['ink-A-saved']);assert.match(page.elements.get('status').textContent,/卡片色号 8/);
   assert.match(page.elements.get('status').textContent,uncolored?/无彩色书写 → 已设置卡片色号 8/:/红色笔迹 → 已设置卡片色号 8/);

@@ -1,11 +1,18 @@
 var __INK_TO_CARD_ANALYSIS__ = (function () {
-  // 直接分析已验证的笔迹，不经 SVG、图片解码或浏览器 Canvas。
+  // 直接分析已验证的普通笔，马克笔由解码入口排除；不经 SVG、图片解码或浏览器 Canvas。
   // 仍按最长边1024的近似可见面积投票，保留笔画覆盖顺序、透明度及最低量规则。
   var samples = [[0.25,0.25],[0.75,0.25],[0.25,0.75],[0.75,0.75]];
   var coverage = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
   function analyze(encoded, length, settings) {
     var drawing = __INK_TO_CARD_DRAWING__.colors(encoded, length);
     var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,colors=[];
+    var metadata={format:"PencilKit wrd",strokeCount:drawing.strokes.length,pointCount:drawing.pointCount,colors:colors,approximate:true};
+    if (drawing.archive) metadata.archive=drawing.archive;
+    if (drawing.excludedMarkerCount) metadata.excludedMarkerCount=drawing.excludedMarkerCount;
+    // 全部为马克笔时返回空普通笔统计，由原生入口明确跳过，不能触发无彩色映射。
+    if (!drawing.strokes.length && drawing.excludedMarkerCount) {
+      return {histogram:InkToCardCore.histogram(new Uint8ClampedArray(4),1,1,settings),drawing:metadata};
+    }
     drawing.strokes.forEach(function (stroke) {
       if (!stroke.alpha) return;
       if (colors.indexOf(stroke.color)<0) colors.push(stroke.color);
@@ -63,8 +70,6 @@ var __INK_TO_CARD_ANALYSIS__ = (function () {
         pixels[at+3]=combined*255;mask[index]=0;
       });
     });
-    var metadata={format:"PencilKit wrd",strokeCount:drawing.strokes.length,pointCount:drawing.pointCount,colors:colors,approximate:true};
-    if (drawing.archive) metadata.archive=drawing.archive;
     return {histogram:InkToCardCore.histogram(pixels,w,h,settings),drawing:metadata};
   }
   return { analyze: analyze };

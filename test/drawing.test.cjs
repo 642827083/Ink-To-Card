@@ -7,7 +7,7 @@ function field(number,wire,value){let body=wire===0?vint(value):wire===2?Buffer.
 function float(number,value){const bytes=Buffer.alloc(4);bytes.writeFloatLE(value);return field(number,5,bytes);}
 function minimal(options={}){
   const color=Buffer.concat([float(1,1),float(2,0),float(3,0),float(4,options.alpha??1)]);
-  const ink=Buffer.concat([field(1,2,color),field(2,2,Buffer.from(options.brush??'com.apple.ink.pen')),field(3,0,3)]);
+  const ink=Buffer.concat([field(1,2,color),field(2,2,Buffer.from(options.brush??'com.apple.ink.pen')),field(3,0,3),...(options.extraInk?[options.extraInk]:[])]);
   const coordinates=options.points??[[options.x??10,20,3]];
   const sharedLayouts={3:[12,22],131:[14,20],195:[16,18]},shared=sharedLayouts[options.layout],compact=!!shared;
   const common=Buffer.alloc(options.commonSize??(compact?shared[1]:16));
@@ -19,6 +19,24 @@ function minimal(options={}){
   return Buffer.concat([Buffer.from('wrd'),field(4,2,ink),field(5,2,stroke)]);
 }
 function read(raw){const d=decoder();return d.decode(d.decodeBase64(raw.toString('base64'),raw.length));}
+
+test('普通笔接受已核对的fixed-width参数，保留颜色、透明度、坐标和笔宽',()=>{
+  const options={alpha:0.5,points:[[10,20,3],[14,25,4]]};
+  assert.equal(JSON.stringify(read(minimal({...options,extraInk:field(4,2,Buffer.from('fixed-width'))}))),JSON.stringify(read(minimal(options))));
+});
+
+test('普通笔变体只接受精确已知值，重复、错误类型、其他笔刷和额外字段仍拒绝',()=>{
+  for(const name of ['','variable-width','Fixed-width','fixed-width\0','固定宽度']){
+    assert.throws(()=>read(minimal({extraInk:field(4,2,Buffer.from(name))})),/未验证的普通笔变体/);
+  }
+  const variant=field(4,2,Buffer.from('fixed-width'));
+  assert.throws(()=>read(minimal({extraInk:Buffer.concat([variant,variant])})),/字段 4 缺失、重复或类型变化/);
+  assert.throws(()=>read(minimal({extraInk:field(4,0,1)})),/未验证字段 4/);
+  assert.throws(()=>read(minimal({extraInk:Buffer.concat([variant,field(10,0,1)])})),/未验证字段 10/);
+  for(const brush of ['com.apple.ink.fountainpen','com.apple.ink.pencil','com.apple.ink.marker']){
+    assert.throws(()=>read(minimal({brush,extraInk:variant})),/当前仅支持普通笔/);
+  }
+});
 function lineFields(identifier=Buffer.from('e209bea639ed4363be7a253677d40e68','hex'),kind=6){return Buffer.concat([field(13,2,identifier),field(14,0,kind)]);}
 
 function pairedCurve(vertices=17){

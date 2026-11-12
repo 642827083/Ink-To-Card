@@ -766,9 +766,12 @@ test('新入口单卡和自动只使用原生笔迹统计，不采用网页传�
 });
 
 test('新入口支持公共头统一规则，单卡、自动、批量共用同一分析结果',()=>{
-  const {handwriting}=require('./helpers/handwriting.cjs');
+  const {handwriting,combineDrawings}=require('./helpers/handwriting.cjs');
   for(const raw of [handwriting([{layout:195,tailLength:16,color:[1,0,0,1]}]),
-    fs.readFileSync(path.join(__dirname,'fixtures/mn5-501-build1-layout131-common24-red.wrd'))]){
+    fs.readFileSync(path.join(__dirname,'fixtures/mn5-501-build1-layout131-common24-red.wrd')),
+    fs.readFileSync(path.join(__dirname,'fixtures/mn5-500-build5-fixed-width-black-red.wrd')),
+    fs.readFileSync(path.join(__dirname,'fixtures/mn5-502-build2-mixed-pen-marker-red.bplist')),
+    combineDrawings(handwriting([{color:[1,0,0,1]}]),fs.readFileSync(path.join(__dirname,'fixtures/mn5-510-build7-marker-only.wrd')))]){
     const env=batchSetup();env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,policy:'red'}});
     const settingsToken=JSON.stringify(env.native.snapshot(env.addon).settings);
     env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
@@ -785,6 +788,133 @@ test('新入口支持公共头统一规则，单卡、自动、批量共用同�
     }
     assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
   }
+});
+
+test('MN5.0.2 fixed-width黑笔归档的手动、自动及批量区分未配置、需改色和已匹配',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'fixtures/mn5-502-build2-fixed-width-black.bplist'));
+  for(const [target,status] of [[-1,'insufficient'],[0,'unchanged'],[5,'applied']]){
+    const env=batchSetup();env.settings=env.context.__INK_TO_CARD_CONFIG__.normalize({...env.settings,mapping:{...env.settings.mapping,uncolored:target}});
+    env.native.saveSettings(env.addon,{noteId:'card',settings:env.settings});
+    env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+    for(const automatic of [false,true]){
+      env.note.colorIndex=0;env.writes.length=0;
+      const result=env.commands.recognizeDrawing(env.addon,env.request({automatic,settingsToken:JSON.stringify(env.settings)}));
+      assert.equal(result.status,status);assert.equal(env.note.colorIndex,target>0?target:0);
+      if(status!=='applied')assert.deepEqual(env.writes,[]);
+    }
+    env.note.colorIndex=0;env.writes.length=0;
+    const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    for(let position=0;position<job.total;position++){
+      const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
+      assert.equal(item.media.drawing.strokeCount,23);assert.equal(item.media.drawing.pointCount,396);
+      assert.equal(item.media.drawing.archive.verifiedAlternative,'drawing2');assert.equal(item.media.histogram.colored,0);
+      assert.equal(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId}).status,status);
+    }
+    assert.equal(env.note.colorIndex,target>0?target:0);assert.equal(env.child.colorIndex,target>0?target:0);assert.equal(env.image.colorIndex,0);
+    if(status!=='applied')assert.deepEqual(env.writes,[]);
+  }
+});
+
+test('只有马克笔含MN5.1新布局时手动、自动和批量均跳过，不触发无彩色或回退早期绘图',()=>{
+  const {handwriting}=require('./helpers/handwriting.cjs');
+  for(const raw of [fs.readFileSync(path.join(__dirname,'fixtures/mn5-510-build7-marker-only.wrd')),
+    handwriting([{brush:'com.apple.ink.marker',inkVariant:'unknown',layout:495}])]){
+    const env=uncoloredSetup(batchSetup,raw);
+    env.note.comments.push({type:'PaintNote',drawing:'last-marker'});
+    const reads=[];env.database.getMediaByHash=hash=>{
+      reads.push(hash);assert.ok(['last-marker','child-last'].includes(hash),'不读取早期普通笔');
+      return {length:raw.length,base64Encoding:()=>raw.toString('base64')};
+    };
+    for(const automatic of [false,true]){
+      const result=env.commands.recognizeDrawing(env.addon,env.request({automatic,index:3,hash:'drawing:last-marker'}));
+      assert.equal(result.status,'skipped');assert.match(result.reason,/已排除马克笔.*未检测到普通笔/);
+      assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
+    }
+    const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    for(let position=0;position<job.total;position++){
+      const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
+      assert.equal(item.media.drawing.strokeCount,0);assert.equal(item.media.drawing.excludedMarkerCount,1);
+      const result=env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId});
+      assert.equal(result.status,'skipped');assert.match(result.reason,/已排除马克笔/);
+    }
+    assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,0);assert.deepEqual(env.writes,[]);
+    assert.ok(reads.length>0);
+  }
+});
+
+test('来源检查明确显示普通笔计数与排除马克笔数，不再建议打开已移除的预览',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'fixtures/mn5-510-build7-marker-only.wrd')),env=setup();
+  env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+  const report=env.commands.inspectSources(env.addon,{noteId:'card',inspectMedia:true});
+  assert.match(report.summary,/仅统计普通笔/);assert.doesNotMatch(report.summary,/预览/);
+  assert.equal(report.drawingMedia[0].drawingDecoded,true);assert.equal(report.drawingMedia[0].strokeCount,0);
+  assert.equal(report.drawingMedia[0].excludedMarkerCount,1);assert.deepEqual(env.writes,[]);
+});
+
+test('黑色普通笔与彩色马克笔混用时，手动、自动及批量只按黑笔的无彩色映射',()=>{
+  const {handwriting}=require('./helpers/handwriting.cjs');
+  const raw=handwriting([{color:[0,0,0,1]},
+    {brush:'com.apple.ink.marker',inkVariant:'unknown',layout:495,color:[1,0,0,1]}]),env=uncoloredSetup(batchSetup,raw);
+  for(const automatic of [false,true]){
+    env.note.colorIndex=0;const result=env.commands.recognizeDrawing(env.addon,env.request({automatic}));
+    assert.equal(result.status,'applied');assert.equal(result.color,'uncolored');assert.equal(env.note.colorIndex,5);
+  }
+  env.note.colorIndex=0;
+  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
+    assert.equal(item.media.drawing.strokeCount,1);assert.equal(item.media.histogram.colored,0);
+    assert.equal(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId}).color,'uncolored');
+  }
+  assert.equal(env.note.colorIndex,5);assert.equal(env.child.colorIndex,5);assert.equal(env.image.colorIndex,0);
+});
+
+test('混合马克笔归档参数未知时，手动、自动及批量仍只按普通笔改色',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'fixtures/mn5-502-build2-mixed-pen-marker-red.bplist'));
+  const offset=raw.lastIndexOf(Buffer.from('linear'));assert.ok(offset>=0);Buffer.from('curved').copy(raw,offset);
+  const env=batchSetup();env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+  for(const automatic of [false,true]){
+    env.note.colorIndex=0;assert.equal(env.commands.recognizeDrawing(env.addon,env.request({automatic})).status,'applied');
+  }
+  env.note.colorIndex=0;
+  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
+    assert.equal(item.media.drawing.strokeCount,153);assert.equal(item.media.drawing.excludedMarkerCount,1);
+    assert.equal(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId}).status,'applied');
+  }
+  assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
+});
+
+test('fixed-width归档另一个表示变坏时，手动、自动和批量均保留原色',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'fixtures/mn5-502-build2-fixed-width-black.bplist'));
+  const offset=raw.lastIndexOf(Buffer.from('fixed-width'));assert.ok(offset>=0);Buffer.from('mixed-width').copy(raw,offset);
+  const env=uncoloredSetup(batchSetup,raw);
+  for(const automatic of [false,true]){
+    assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request({automatic})),/另一个绘图版本无法核对.*未验证的普通笔变体/);
+  }
+  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});assert.ok(item.skipped);assert.equal(item.media,undefined);
+  }
+  assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,0);assert.deepEqual(env.writes,[]);
+});
+
+test('fixed-width样本混入未知变体时，单卡、自动及批量不使用部分笔迹改色',()=>{
+  const raw=fs.readFileSync(path.join(__dirname,'fixtures/mn5-500-build5-fixed-width-black-red.wrd'));
+  const offset=raw.lastIndexOf(Buffer.from('fixed-width'));assert.ok(offset>=0);
+  Buffer.from('mixed-width').copy(raw,offset);
+  const env=batchSetup();env.database.getMediaByHash=()=>({length:raw.length,base64Encoding:()=>raw.toString('base64')});
+  for(const automatic of [false,true]){
+    assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request({automatic})),/未验证的普通笔变体/);
+    assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
+  }
+  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
+    assert.ok(item.skipped);assert.equal(item.media,undefined);
+  }
+  assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,0);assert.deepEqual(env.writes,[]);
 });
 
 test('新识色流程在切卡、后台、设置变化、手动改色和最后绘图变坏时均保留原色',()=>{

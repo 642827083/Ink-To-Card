@@ -68,13 +68,24 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     }
     return values;
   }
-  function ink(bytes, compatibility) {
-    var records = fields(bytes); known(records, { 1: 2, 2: 2, 3: 0, 8: 1 });
-    var color = floats(one(records, 1, 2), 4), nameBytes = one(records, 2, 2), identifier = "";
+  function ink(bytes, compatibility, colorAnalysis) {
+    var records = fields(bytes), nameBytes = one(records, 2, 2), identifier = "";
     for (var i = 0; i < nameBytes.length; i += 1) identifier += String.fromCharCode(nameBytes[i]);
+    // 用户明确排除马克笔：确认精确笔刷身份后不再解读它的笔色参数和点布局。
+    // 外层二进制、笔色引用和归档结构仍校验；其他未知笔刷与普通笔格式仍拒绝。
+    if (colorAnalysis === true && identifier === "com.apple.ink.marker") return { excluded: true };
+    known(records, { 1: 2, 2: 2, 3: 0, 4: 2, 8: 1 });
+    var color = floats(one(records, 1, 2), 4);
     // 归档钢笔只用于与同档普通笔兼容版本逐笔核对，不作为独立的钢笔渲染器。
     if (identifier !== "com.apple.ink.pen" && !(compatibility && identifier === "com.apple.ink.fountainpen"))
       fail("当前仅支持普通笔，笔刷为 " + identifier.slice(0, 80));
+    var variant = one(records, 4, 2, true), expectedVariant = "fixed-width";
+    if (variant !== null) {
+      if (identifier !== "com.apple.ink.pen" || variant.length !== expectedVariant.length) fail("未验证的普通笔变体");
+      for (var j = 0; j < variant.length; j += 1) {
+        if (variant[j] !== expectedVariant.charCodeAt(j)) fail("未验证的普通笔变体");
+      }
+    }
     if (one(records, 3, 0, true) !== 3) fail("笔色模型变化");
     color.forEach(function (channel) { if (channel < 0 || channel > 1) fail("笔色范围无效"); });
     var hex = "#";
@@ -145,10 +156,15 @@ var __INK_TO_CARD_DRAWING__ = (function () {
     var strokes = records.filter(function (record) { return record.number === 5; });
     var budget = { count: 0, previewOnly: previewOnly === true, colorAnalysis: colorAnalysis === true, pathMarkers: [], unverifiedPathMarkers: false, strokeIndex: 0 };
     if (!inks.length || inks.length > 64 || !strokes.length || strokes.length > MAX_STROKES) fail("笔色或笔画数量超出范围");
-    inks = inks.map(function (record) { return ink(record.value, compatibility); });
-    strokes = strokes.map(function (record, strokeIndex) {
-      budget.strokeIndex = strokeIndex;
+    inks = inks.map(function (record) { return ink(record.value, compatibility, colorAnalysis); });
+    var excludedMarkerCount = 0, ordinaryIndex = 0;
+    strokes = strokes.map(function (record) {
       var stroke = fields(record.value), strokeTypes = { 1: 2, 2: 2, 3: 2, 4: 0, 5: 2, 6: 2, 7: 2, 8: 0, 13: 2, 14: 0 };
+      var index = one(stroke, 4, 0);
+      if (!inks[index]) fail("笔画引用的笔色不存在");
+      if (inks[index].excluded) { excludedMarkerCount += 1; return null; }
+      // 使用排除后的序号核对普通笔，马克笔在归档中的位置不影响路径标记。
+      budget.strokeIndex = ordinaryIndex++;
       if (compatibility) strokeTypes[15] = 2;
       known(stroke, strokeTypes);
       if (compatibility) {
@@ -159,8 +175,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
           if (values.join(",") !== "1,0,0,0.25,0,0") fail("归档兼容版本含未验证的附加记录");
         }
       }
-      var index = one(stroke, 4, 0), transform = floats(one(stroke, 7, 2), 6);
-      if (!inks[index]) fail("笔画引用的笔色不存在");
+      var transform = floats(one(stroke, 7, 2), 6);
       var first = transform[0] * transform[0] + transform[1] * transform[1], second = transform[2] * transform[2] + transform[3] * transform[3];
       if (first <= 0 || Math.abs(first - second) > first * 0.0001
         || Math.abs(transform[0] * transform[2] + transform[1] * transform[3]) > first * 0.0001) fail("未验证的笔画拉伸变换");
@@ -168,8 +183,10 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       verifiedMarkedPath(stroke);
       // 额外的遮罩、擦除和其他新字段会在 known 中拒绝，不能默默算入旧笔迹。
       return { color: inks[index].color, alpha: inks[index].alpha, points: path };
-    });
-    return { strokes: strokes, pointCount: budget.count, pathMarkers: budget.pathMarkers, previewOnly: budget.unverifiedPathMarkers };
+    }).filter(function (stroke) { return stroke !== null; });
+    var drawing = { strokes: strokes, pointCount: budget.count, pathMarkers: budget.pathMarkers, previewOnly: budget.unverifiedPathMarkers };
+    if (excludedMarkerCount) drawing.excludedMarkerCount = excludedMarkerCount;
+    return drawing;
   }
   function verifiedMarkedPath(records) {
     var identifier = one(records, 13, 2, true), kind = one(records, 14, 0, true);
@@ -298,6 +315,7 @@ var __INK_TO_CARD_DRAWING__ = (function () {
       catch (error) { fail("归档的另一个绘图版本无法核对：" + error.message); }
       // 同档的两个名字是兼容表示，不能相加或挑一个能读的就跳过另一个。
       // 忽略身份和边界等元数据差别；颜色、透明度、全部路径与变换后的笔宽必须一致。
+      // 识色入口核对排除马克笔后保留的全部普通笔及路径标记，不能忽略普通笔差异。
       if (JSON.stringify(drawing.strokes) !== JSON.stringify(alternative.strokes)
         || JSON.stringify(drawing.pathMarkers) !== JSON.stringify(alternative.pathMarkers)
         || drawing.previewOnly !== alternative.previewOnly) fail("归档的两个绘图版本内容不一致");

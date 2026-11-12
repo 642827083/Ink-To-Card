@@ -46,7 +46,7 @@
       <p class="hint">单击插件图标打开或收起面板；双击切换自动跟随，并收起面板。自动跟随开启时图标保持高亮。</p>
       <div class="row diagnostic-source"><h2>手写来源</h2><span id="source-badge" class="badge">自动选择</span></div><div id="counts" class="counts" hidden></div>
       <p class="hint">先在脑图中选一张卡片，取消选中后继续跟踪；单选其他卡片时切换目标。</p>
-      <p class="hint">自动选择批注顺序中的最后一条手写绘图。普通图片不参与识别，不支持的绘图格式会跳过。</p>
+      <p class="hint">自动选择批注顺序中的最后一条手写绘图，仅识别普通笔；马克笔和普通图片不参与识别。只有马克笔时保留卡片原色，不支持的普通笔格式会跳过。</p>
       <p class="hint">自动跟随约每 0.3 秒检查，笔迹保存且稳定至少 0.3 秒后识别。收起面板后继续跟踪；离开学习集或 MN 进入后台时暂停。</p>
       <div class="row diagnostic-actions"><button id="inspect-sources" class="text-button" type="button" disabled>检查手写来源</button><button id="export-sample" class="text-button" type="button" disabled>导出绘图样本</button></div>
       <p class="footnote">样本包含最后一条绘图的原始数据，用于排查解码格式。</p>
@@ -54,7 +54,7 @@
       <button id="open-community" class="text-button" type="button">社区说明与反馈 ↗</button>
       <p class="hint">查看完整使用说明、版本更新，或反馈识别问题。</p>
     </details>
-    <footer>Ink To Card · 乔木Joe · 1.0.7</footer>
+    <footer>Ink To Card · 乔木Joe · 1.0.8</footer>
   </main>
   <script src="InkToCardConfig.js"></script>
   <script src="InkToCardCore.js"></script>
