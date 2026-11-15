@@ -21,8 +21,8 @@
       <button id="recognize" class="primary" type="button" disabled>立即识别并改色</button>
     </section>
     <details id="batch-section" class="card disclosure">
-      <summary>批量处理</summary><p class="hint">每张卡独立读取最后一条手写绘图，使用当前学习集的颜色映射。</p>
-      <div class="row batch-actions"><button id="batch-selected" class="secondary" type="button" disabled>处理选中卡片</button><button id="batch-notebook" class="secondary" type="button" disabled>处理当前学习集</button></div>
+      <summary>批量处理</summary><p class="hint">每张卡独立读取最后一条手写绘图，使用当前学习集的颜色映射。“下一级”仅处理直接子卡片，“所有下级”包含全部层级；两者均不处理所选卡片本身。</p>
+      <div class="row batch-actions"><button id="batch-selected" class="secondary" type="button" disabled>处理选中卡片</button><button id="batch-direct-children" class="secondary" type="button" disabled>处理下一级卡片</button><button id="batch-children" class="secondary" type="button" disabled>处理所有下级卡片</button></div>
       <p id="batch-status" class="hint" role="status" aria-live="polite">无手写或无法识别的卡片会跳过。已改色卡片可以逐张撤销。</p>
       <button id="batch-cancel" class="text-button" type="button" hidden>取消剩余处理</button>
       <details><summary>跳过详情（最多显示 50 条）</summary><pre id="batch-details"></pre></details>
@@ -54,7 +54,7 @@
       <button id="open-community" class="text-button" type="button">社区说明与反馈 ↗</button>
       <p class="hint">查看完整使用说明、版本更新，或反馈识别问题。</p>
     </details>
-    <footer>Ink To Card · 乔木Joe · 1.0.8</footer>
+    <footer>Ink To Card · 乔木Joe · 1.0.9</footer>
   </main>
   <script src="InkToCardConfig.js"></script>
   <script src="InkToCardCore.js"></script>

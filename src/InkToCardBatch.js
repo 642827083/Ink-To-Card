@@ -12,34 +12,39 @@ var __INK_TO_CARD_BATCH__ = (function () {
     for (var i = 0; item && !native.value(item, "noteId") && i < 3; i += 1) item = native.value(item, "note");
     return item;
   }
+  function childCards(note) {
+    var children = native.list(native.value(note, "childNotes")), childMap = native.value(note, "childMindMap");
+    return childMap ? children.concat([childMap]) : children;
+  }
   function begin(addon, payload) {
-    var controller = notebook(addon), topic = String(controller.notebookId), db = native.database(), roots;
-    if (payload.scope === "selected") {
-      var view = controller.mindmapView;
-      if (!view || native.value(view, "selViewLst") === undefined) throw new Error("当前 MN 未开放脑图选中列表");
-      roots = native.list(native.value(view, "selViewLst")).map(unwrap);
-      if (roots.some(function (item) { return !item || !item.noteId; })) throw new Error("无法读取选中的卡片对象");
-    } else if (payload.scope === "notebook") {
-      if (typeof db.getNotebookById !== "function") throw new Error("当前 MN 未开放学习集读取接口");
-      var book = db.getNotebookById(topic);
-      if (!book || native.value(book, "notes") === undefined) throw new Error("无法读取学习集卡片列表");
-      roots = native.list(native.value(book, "notes"));
-    } else throw new Error("批量范围无效");
-    var queue = roots.slice(), seen = Object.create(null), ids = [];
+    var controller = notebook(addon), topic = String(controller.notebookId);
+    if (["selected", "direct-children", "children"].indexOf(payload.scope) < 0) throw new Error("批量范围无效");
+    var childrenOnly = payload.scope !== "selected", directOnly = payload.scope === "direct-children", view = controller.mindmapView;
+    if (!view || native.value(view, "selViewLst") === undefined) throw new Error("当前 MN 未开放脑图选中列表");
+    var roots = native.list(native.value(view, "selViewLst")).map(unwrap);
+    if (roots.some(function (item) { return !item || !item.noteId; })) throw new Error("无法读取选中的卡片对象");
+    if (!roots.length) throw new Error(childrenOnly ? "请先在脑图中选中要处理下级卡片的父卡片" : "请先在脑图中选中要处理的卡片");
+    var queue = roots.slice(), seen = Object.create(null), excluded = Object.create(null), ids = [];
+    // 多选父子卡片时，所有选中项均只作为遍历起点，不参与子卡片改色。
+    if (childrenOnly) roots.forEach(function (item) { excluded[String(item.noteId)] = true; });
+    if (directOnly) {
+      // 先收集每个选中项的直接下级，不再向下展开，避免多选父子时受遍历顺序影响。
+      queue = [];
+      roots.forEach(function (item) {
+        if (String(item.notebookId) === topic) queue = queue.concat(childCards(item));
+      });
+    }
     while (queue.length) {
       var item = queue.pop(), id = item && String(item.noteId || "");
       if (!id || seen[id]) continue;
       seen[id] = true;
       if (String(item.notebookId) !== topic) continue;
-      ids.push(id);
+      if (!excluded[id]) ids.push(id);
       if (ids.length > 5000) throw new Error("一次最多处理 5000 张卡，请缩小选择范围");
-      if (payload.scope === "notebook") {
-        queue = queue.concat(native.list(native.value(item, "childNotes")));
-        var childMap = native.value(item, "childMindMap");
-        if (childMap) queue.push(childMap);
-      }
+      if (payload.scope === "children") queue = queue.concat(childCards(item));
     }
-    if (!ids.length) throw new Error(payload.scope === "selected" ? "请先在脑图中选中要处理的卡片" : "学习集中没有可处理的卡片");
+    if (!ids.length) throw new Error(directOnly ? "选中卡片下没有可处理的下一级卡片"
+      : childrenOnly ? "选中卡片下没有可处理的下级卡片" : "请先在脑图中选中要处理的卡片");
     var options = native.settings(topic);
     if (options.mapping.uncolored < 0 && (options.policy === "red" ? options.mapping.red < 0 : !Object.keys(options.mapping).some(function (key) { return options.mapping[key] >= 0; }))) {
       throw new Error(options.policy === "red" ? "请先设置红色对应的卡片色号" : "请先设置笔迹颜色映射");

@@ -20,7 +20,8 @@ var InkToCardApp = (function () {
     controlState(element("inspect-sources"), available, !idle || diagnosing);
     controlState(element("export-sample"), available && state.source, !idle);
     controlState(element("batch-selected"), state && state.topicId, !idle);
-    controlState(element("batch-notebook"), state && state.topicId, !idle);
+    controlState(element("batch-direct-children"), state && state.topicId, !idle);
+    controlState(element("batch-children"), state && state.topicId, !idle);
     element("batch-cancel").hidden = !batch;
     element("batch-cancel").disabled = !!(batch && batch.cancelled);
     trackingStatus();
@@ -292,7 +293,8 @@ var InkToCardApp = (function () {
       catch (error) { status(error.message, true); }
     });
     element("batch-selected").addEventListener("click", function () { runBatch("selected"); });
-    element("batch-notebook").addEventListener("click", function () { runBatch("notebook"); });
+    element("batch-direct-children").addEventListener("click", function () { runBatch("direct-children"); });
+    element("batch-children").addEventListener("click", function () { runBatch("children"); });
     element("batch-cancel").addEventListener("click", cancelBatch);
     element("recognize").addEventListener("click", async function () { await refresh(); await recognize(state, false); });
     InkToCardStartup.initialized();

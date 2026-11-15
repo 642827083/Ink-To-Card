@@ -303,6 +303,26 @@ test('安装包移除预览界面与浏览器图像识色，保留检查来源�
 });
 
 
+test('安装包三个批量按钮分别发送选中、下一级和所有下级范围，移除整学习集入口',async()=>{
+  const scopes=[],page=packagedPage({onBridge(address,context){
+    const request=JSON.parse(decodeURIComponent(address.split('payload=')[1]));let payload;
+    if(request.command==='readCurrent')payload={available:true,noteId:'A',topicId:'topic',title:'父卡片',colorIndex:0,settings:context.__INK_TO_CARD_CONFIG__.normalize({mapping:{red:3}})};
+    else if(request.command==='beginBatch'){
+      scopes.push(request.payload.scope);assert.equal(request.payload.analysisMode,'ink');payload={batchId:'batch',total:1};
+    }else if(request.command==='prepareBatchCard')payload={noteId:'child',title:'子卡片',skipped:true,reason:'没有可读取的手写绘图'};
+    else if(request.command==='endBatch')payload={ended:true};
+    else throw Error('非预期命令：'+request.command);
+    context.InkToCardReceive({requestId:request.requestId,payload});
+  }});
+  await page.start();assert.deepEqual(page.errors,[]);assert.equal(page.elements.has('batch-notebook'),false);
+  for(const id of ['batch-selected','batch-direct-children','batch-children']){
+    assert.equal(page.elements.get(id).disabled,false);
+    page.elements.get(id).handlers.get('click')();await page.advance(0);
+    assert.match(page.elements.get('batch-status').textContent,/已完成.*处理 1 \/ 1.*跳过 1/);
+  }
+  assert.deepEqual(scopes,['selected','direct-children','children']);
+});
+
 test('面板反馈区分等待选卡、缺少映射、等待手写，并随学习集刷新摘要',async()=>{
   let snapshot={available:false,topicId:'topic',tracking:true,reason:'请先选一张卡片'};
   const page=packagedPage({onBridge(address,context){

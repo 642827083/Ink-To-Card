@@ -306,8 +306,12 @@ function batchSetup() {
   env.notebook.mindmapView={selViewLst:[{note:{note:child}},{note:env.note},{note:{note:child}}]};
   return {...env,child,image,foreign,notes};
 }
-test('整学习集批量遍历子卡并去重，不跟随外集链接，也不必切换焦点',()=>{
-  const env=batchSetup(), job=env.commands.beginBatch(env.addon,{scope:'notebook'}), results=[];
+test('选中卡片的子卡片批量遍历所有层级并去重，不处理父卡或外集链接',()=>{
+  const env=batchSetup(),grandchild={...env.child,noteId:'grandchild',childNotes:[]};
+  env.child.childNotes=[env.note,grandchild,env.foreign];env.notes.set(grandchild.noteId,grandchild);
+  env.note.linkedNotes=[env.image];env.notebook.mindmapView.selViewLst=[{note:env.note}];
+  env.database.getNotebookById=()=>{throw Error('不得读取整个学习集');};
+  const job=env.commands.beginBatch(env.addon,{scope:'children'}), results=[];
   assert.equal(job.total,3);env.notebook.focusNote=null;
   for(let position=0;position<job.total;position++) {
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
@@ -316,9 +320,79 @@ test('整学习集批量遍历子卡并去重，不跟随外集链接，也不�
     results.push(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId,histogram:env.request().histogram}).status);
   }
   assert.deepEqual(results.sort(),['applied','applied','skipped']);
-  assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);assert.equal(env.foreign.colorIndex,0);
-  assert.deepEqual(env.mediaReads.sort(),['child-last','child-last','handwriting','handwriting']);
+  assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,3);assert.equal(grandchild.colorIndex,3);assert.equal(env.image.colorIndex,0);assert.equal(env.foreign.colorIndex,0);
+  assert.deepEqual(env.mediaReads.sort(),['child-last','child-last','child-last','child-last']);
   assert.equal(env.writes.filter(item=>item[0]==='undo').length,2);
+});
+
+test('下一级批量只改直接下级，不读取父卡、孙卡或其他学习集',()=>{
+  const env=batchSetup(),grandchild={...env.child,noteId:'grandchild',childNotes:[]};
+  env.notes.set(grandchild.noteId,grandchild);env.child.childNotes=[grandchild,env.note];
+  env.note.childNotes.push(env.foreign);env.notebook.mindmapView.selViewLst=[{note:env.note}];
+  const job=env.commands.beginBatch(env.addon,{scope:'direct-children',analysisMode:'ink'}),ids=[];
+  assert.equal(job.total,2);
+  for(let position=0;position<job.total;position++){
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});ids.push(item.noteId);
+    if(!item.skipped)assert.equal(env.commands.applyBatchResult(env.addon,{batchId:job.batchId,noteId:item.noteId}).status,'applied');
+  }
+  assert.deepEqual(ids.sort(),['child','image']);assert.equal(env.child.colorIndex,3);
+  for(const note of [env.note,grandchild,env.image,env.foreign])assert.equal(note.colorIndex,0);
+  assert.deepEqual(env.mediaReads,['child-last','child-last']);
+});
+
+test('下一级批量在父子同时选中时分别取直接下级，选中顺序不影响范围',()=>{
+  for(const reverse of [false,true]){
+    const env=batchSetup(),grandchild={...env.child,noteId:'grandchild',childNotes:[]},map={...env.child,noteId:'child-map',childNotes:[]};
+    const deep={...env.child,noteId:'map-child',childNotes:[]};map.childNotes=[deep];
+    env.child.childNotes=[grandchild,env.note];env.note.childMindMap=map;
+    for(const note of [grandchild,map,deep])env.notes.set(note.noteId,note);
+    const selected=reverse?[env.child,env.note]:[env.note,env.child];selected.push(env.note);
+    env.notebook.mindmapView.selViewLst={count:()=>selected.length,objectAtIndex:index=>({note:{note:selected[index]}})};
+    const job=env.commands.beginBatch(env.addon,{scope:'direct-children'}),ids=[];
+    for(let position=0;position<job.total;position++)ids.push(env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position}).noteId);
+    assert.deepEqual(ids.sort(),['child-map','grandchild','image']);assert.deepEqual(env.writes,[]);
+  }
+});
+
+test('下一级批量无选区、不支持选区或没有直接下级时明确提示',()=>{
+  const env=batchSetup();env.notebook.mindmapView.selViewLst=[];
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'direct-children'}),/选中.*父卡片/);
+  env.notebook.mindmapView.selViewLst=[{note:env.image}];
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'direct-children'}),/没有可处理的下一级卡片/);
+  env.notebook.mindmapView=null;
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'direct-children'}),/未开放脑图选中列表/);
+  assert.deepEqual(env.writes,[]);assert.deepEqual(env.mediaReads,[]);
+});
+
+test('多选父卡合并子孙与子脑图，排除所有所选卡片并防止重复和循环',()=>{
+  const env=batchSetup(),other={...env.note,noteId:'other-parent',childNotes:[env.child]},map={...env.child,noteId:'child-map',childNotes:[]};
+  env.child.childNotes=[env.note,map];env.note.childMindMap=map;map.childMindMap=env.note;
+  env.notes.set(other.noteId,other);env.notes.set(map.noteId,map);
+  env.notebook.mindmapView.selViewLst={count:()=>3,objectAtIndex:index=>({objectForKey:key=>key==='note'?{note:[env.note,other,env.child][index]}:undefined})};
+  const job=env.commands.beginBatch(env.addon,{scope:'children'}),ids=[];
+  for(let position=0;position<job.total;position++)ids.push(env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position}).noteId);
+  assert.deepEqual(ids.sort(),['child-map','image']);assert.deepEqual(env.writes,[]);
+});
+
+test('子卡片批量须有真实选区及可处理子卡，原学习集范围已移除',()=>{
+  const env=batchSetup();env.notebook.mindmapView.selViewLst=[];
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'children'}),/选中.*父卡片/);
+  env.notebook.mindmapView.selViewLst=[{note:env.image}];
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'children'}),/没有可处理的下级卡片/);
+  env.notebook.mindmapView.selViewLst=[{note:env.note}];
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'notebook'}),/批量范围无效/);
+  assert.deepEqual(env.mediaReads,[]);assert.deepEqual(env.writes,[]);
+});
+
+test('子卡片处理上限只计算待处理子卡，不把父卡计入5000张',()=>{
+  for(const scope of ['direct-children','children']){
+  const env=batchSetup();env.notebook.mindmapView.selViewLst=[{note:env.note}];
+  env.note.childNotes=Array.from({length:5000},(_,i)=>({noteId:'child-'+i,notebookId:'topic'}));
+  assert.equal(env.commands.beginBatch(env.addon,{scope}).total,5000);
+  env.note.childNotes.push({noteId:'child-5000',notebookId:'topic'});
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope}),/5000/);
+  assert.deepEqual(env.mediaReads,[]);assert.deepEqual(env.writes,[]);
+  }
 });
 test('选中批量只处理选中的卡片，原生容器兼容且不自动扩展子卡',()=>{
   const env=batchSetup(), entries=[{objectForKey:key=>key==='note'?{note:env.child}:undefined}];
@@ -336,11 +410,12 @@ test('批量取消、学习集切换、后台和设置变化都会拒绝在途�
   const changes=[env=>env.commands.endBatch(env.addon,{batchId:env.job.batchId}),env=>{env.notebook.notebookId='other';},
     env=>{env.addon.inkInactive=true;},env=>{env.addon.inkNotebookOpen=false;},
     env=>env.storage.set('cn.marginnote.ink-to-card.settings.topic',JSON.stringify({...env.settings,policy:'red'}))];
-  for(const change of changes) {
+  for(const scope of ['selected','direct-children','children'])for(const change of changes) {
     const env=batchSetup();env.notebook.mindmapView.selViewLst=[{note:env.note}];
-    env.job=env.commands.beginBatch(env.addon,{scope:'selected'});
-    env.commands.prepareBatchCard(env.addon,{batchId:env.job.batchId,position:0});change(env);
-    assert.throws(()=>env.commands.applyBatchResult(env.addon,{batchId:env.job.batchId,noteId:'card',histogram:env.request().histogram}));
+    env.note.childNotes=[env.child];
+    env.job=env.commands.beginBatch(env.addon,{scope});
+    const item=env.commands.prepareBatchCard(env.addon,{batchId:env.job.batchId,position:0});assert.equal(item.skipped,undefined);change(env);
+    assert.throws(()=>env.commands.applyBatchResult(env.addon,{batchId:env.job.batchId,noteId:item.noteId,histogram:env.request().histogram}));
     assert.deepEqual(env.writes,[]);
   }
 });
@@ -378,10 +453,11 @@ test('最后绘图是未知内嵌对象时也不回退到可解码的早期绘�
 test('空选择、未配置红色映射、超大批次明确报错',()=>{
   const env=batchSetup();env.notebook.mindmapView.selViewLst=[];
   assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'selected'}),/选中/);
+  env.notebook.mindmapView.selViewLst=[{note:env.note}];
   env.native.saveSettings(env.addon,{noteId:'card',settings:{policy:'red',mapping:{blue:2}}});
-  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'notebook'}),/红色对应/);
-  env.database.getNotebookById=()=>({notes:Array.from({length:5001},(_,i)=>({noteId:String(i),notebookId:'topic'}))});
-  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'notebook'}),/5000/);
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'selected'}),/红色对应/);
+  env.note.childNotes=Array.from({length:5001},(_,i)=>({noteId:String(i),notebookId:'topic'}));
+  assert.throws(()=>env.commands.beginBatch(env.addon,{scope:'children'}),/5000/);
 });
 
 function webBatchSetup(options={}) {
@@ -409,22 +485,24 @@ function webBatchSetup(options={}) {
   env.native.saveSettings(env.addon,{noteId:'card',settings:{...env.settings,policy:'red'}});
   return {...env,web,elements,calls,prepareCallbacks};
 }
-test('网页批量通过实际原生命令处理多卡，使用红色模式并显示完成与跳过详情',async()=>{
-  const env=webBatchSetup();await env.web.InkToCardApp.refresh();
-  await env.web.InkToCardApp.runBatch('notebook');
-  assert.equal(env.note.colorIndex,3);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
-  assert.match(env.elements.get('batch-status').textContent,/处理 3 \/ 3 · 改色 2.*跳过 1/);
+test('网页子卡片批量只改所选父卡下面的卡片，显示完成与跳过详情',async()=>{
+  const env=webBatchSetup();env.notebook.mindmapView.selViewLst=[{note:env.note}];await env.web.InkToCardApp.refresh();
+  await env.web.InkToCardApp.runBatch('children');
+  assert.equal(env.note.colorIndex,0);assert.equal(env.child.colorIndex,3);assert.equal(env.image.colorIndex,0);
+  assert.match(env.elements.get('batch-status').textContent,/处理 2 \/ 2 · 改色 1.*跳过 1/);
   assert.match(env.elements.get('batch-details').textContent,/普通图片卡.*没有可读取的手写绘图/);
-  assert.equal(env.elements.get('batch-notebook').disabled,false);assert.equal(env.addon.inkBatch,null);
+  assert.equal(env.elements.get('batch-children').disabled,false);assert.equal(env.addon.inkBatch,null);
 });
 test('网页取消等待原生准备的批次，不能继续提交当前卡或剩余卡',async()=>{
-  const env=webBatchSetup({deferPrepare:true});await env.web.InkToCardApp.refresh();
-  const running=env.web.InkToCardApp.runBatch('notebook');
+  for(const scope of ['direct-children','children']){
+  const env=webBatchSetup({deferPrepare:true});env.notebook.mindmapView.selViewLst=[{note:env.note}];await env.web.InkToCardApp.refresh();
+  const running=env.web.InkToCardApp.runBatch(scope);
   for(let i=0;i<10&&!env.prepareCallbacks.length;i++)await new Promise(resolve=>setImmediate(resolve));
   assert.ok(env.prepareCallbacks.length);
   await env.web.InkToCardApp.cancelBatch();env.prepareCallbacks[0]();await running;
   assert.deepEqual(env.writes,[]);assert.ok(!env.calls.includes('applyBatchResult'));
   assert.match(env.elements.get('batch-status').textContent,/已取消/);assert.equal(env.addon.inkBatch,null);
+  }
 });
 test('网页在途任务失效后停止整批，不把设置变化当作单卡解码失败继续',async()=>{
   const env=webBatchSetup({onCommand:(command,env)=>{if(command==='prepareBatchCard')env.notebook.notebookId='other';}});
@@ -536,7 +614,7 @@ test('MN5.0.1布局167样本识别成功，目标为当前色号1时单卡、自
     const result=env.commands.applyResult(env.addon,env.request({automatic}));
     assert.equal(result.status,'unchanged');assert.equal(result.color,'uncolored');assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
   }
-  const env=prepare(batchSetup),job=env.commands.beginBatch(env.addon,{scope:'notebook'});
+  const env=prepare(batchSetup),job=env.commands.beginBatch(env.addon,{scope:'selected'});
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
     if(item.noteId==='image'){assert.equal(item.skipped,true);continue;}
@@ -594,7 +672,8 @@ test('仅配置无彩色书写即可批量，无手写或最后绘图不支持�
   env.settings=env.context.__INK_TO_CARD_CONFIG__.normalize({policy:'red',mapping:{uncolored:5}});
   env.native.saveSettings(env.addon,{noteId:'card',settings:env.settings});
   env.child.comments.push({type:'PaintNote',drawing:{unsupported:true}});
-  const job=env.commands.beginBatch(env.addon,{scope:'notebook'});assert.equal(job.total,3);
+  env.notebook.mindmapView.selViewLst.push({note:env.image});
+  const job=env.commands.beginBatch(env.addon,{scope:'selected'});assert.equal(job.total,3);
   let applied=0,skipped=0;
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
@@ -612,7 +691,8 @@ test('网页批量无彩色书写通过实际原生命令改黑笔卡，彩笔�
   env.native.saveSettings(env.addon,{noteId:'card',settings:env.settings});
   const {handwriting}=require('./helpers/handwriting.cjs'),black=handwriting(),red=handwriting([{color:[1,0,0,1]}]);
   env.database.getMediaByHash=hash=>{const raw=hash==='handwriting'?black:red;return {length:raw.length,base64Encoding:()=>raw.toString('base64')};};
-  await env.web.InkToCardApp.refresh();await env.web.InkToCardApp.runBatch('notebook');
+  env.notebook.mindmapView.selViewLst.push({note:env.image});
+  await env.web.InkToCardApp.refresh();await env.web.InkToCardApp.runBatch('selected');
   assert.equal(env.note.colorIndex,5);assert.equal(env.child.colorIndex,0);assert.equal(env.image.colorIndex,0);
   assert.match(env.elements.get('batch-status').textContent,/改色 1.*跳过 2/);
 });
@@ -724,7 +804,7 @@ test('MN5公共头、恢复的真实归档和公共宽度路径标记共用单�
     for(const automatic of [false,true]){
       env.note.colorIndex=0;assert.equal(env.commands.applyResult(env.addon,env.request({automatic})).status,'applied');assert.equal(env.note.colorIndex,3);
     }
-    env.note.colorIndex=0;const job=env.commands.beginBatch(env.addon,{scope:'notebook'});
+    env.note.colorIndex=0;const job=env.commands.beginBatch(env.addon,{scope:'selected'});
     for(let position=0;position<job.total;position++){
       const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
       if(item.noteId==='image'){assert.equal(item.skipped,true);continue;}
@@ -779,7 +859,7 @@ test('新入口支持公共头统一规则，单卡、自动、批量共用同�
       env.note.colorIndex=0;
       assert.equal(env.commands.recognizeDrawing(env.addon,env.request({automatic,settingsToken})).status,'applied');
     }
-    env.note.colorIndex=0;const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    env.note.colorIndex=0;const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
     for(let position=0;position<job.total;position++){
       const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
       if(item.skipped)continue;
@@ -803,7 +883,7 @@ test('MN5.0.2 fixed-width黑笔归档的手动、自动及批量区分未配置�
       if(status!=='applied')assert.deepEqual(env.writes,[]);
     }
     env.note.colorIndex=0;env.writes.length=0;
-    const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
     for(let position=0;position<job.total;position++){
       const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
       assert.equal(item.media.drawing.strokeCount,23);assert.equal(item.media.drawing.pointCount,396);
@@ -830,7 +910,7 @@ test('只有马克笔含MN5.1新布局时手动、自动和批量均跳过，不
       assert.equal(result.status,'skipped');assert.match(result.reason,/已排除马克笔.*未检测到普通笔/);
       assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
     }
-    const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+    const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
     for(let position=0;position<job.total;position++){
       const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
       assert.equal(item.media.drawing.strokeCount,0);assert.equal(item.media.drawing.excludedMarkerCount,1);
@@ -860,7 +940,7 @@ test('黑色普通笔与彩色马克笔混用时，手动、自动及批量只�
     assert.equal(result.status,'applied');assert.equal(result.color,'uncolored');assert.equal(env.note.colorIndex,5);
   }
   env.note.colorIndex=0;
-  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
     assert.equal(item.media.drawing.strokeCount,1);assert.equal(item.media.histogram.colored,0);
@@ -877,7 +957,7 @@ test('混合马克笔归档参数未知时，手动、自动及批量仍只按�
     env.note.colorIndex=0;assert.equal(env.commands.recognizeDrawing(env.addon,env.request({automatic})).status,'applied');
   }
   env.note.colorIndex=0;
-  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});if(item.skipped)continue;
     assert.equal(item.media.drawing.strokeCount,153);assert.equal(item.media.drawing.excludedMarkerCount,1);
@@ -893,7 +973,7 @@ test('fixed-width归档另一个表示变坏时，手动、自动和批量均保
   for(const automatic of [false,true]){
     assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request({automatic})),/另一个绘图版本无法核对.*未验证的普通笔变体/);
   }
-  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});assert.ok(item.skipped);assert.equal(item.media,undefined);
   }
@@ -909,7 +989,7 @@ test('fixed-width样本混入未知变体时，单卡、自动及批量不使用
     assert.throws(()=>env.commands.recognizeDrawing(env.addon,env.request({automatic})),/未验证的普通笔变体/);
     assert.equal(env.note.colorIndex,0);assert.deepEqual(env.writes,[]);
   }
-  const job=env.commands.beginBatch(env.addon,{scope:'notebook',analysisMode:'ink'});
+  const job=env.commands.beginBatch(env.addon,{scope:'selected',analysisMode:'ink'});
   for(let position=0;position<job.total;position++){
     const item=env.commands.prepareBatchCard(env.addon,{batchId:job.batchId,position});
     assert.ok(item.skipped);assert.equal(item.media,undefined);

@@ -9,7 +9,10 @@
       if (command === "readCurrent") return { available: true, noteId: "demo", topicId: "demo-topic", title: "示例卡片 · 红色笔迹", colorIndex: colorIndex,
         settings: settings, sources: [source], source: source, bindingInvalid: false };
       if (command === "saveSettings") { settings = __INK_TO_CARD_CONFIG__.normalize(payload.settings); return settings; }
-      if (command === "beginBatch") { batchId = "demo-batch"; return {batchId: batchId, total: 3, settings: settings}; }
+      if (command === "beginBatch") {
+        if (["selected", "direct-children", "children"].indexOf(payload.scope) < 0) throw new Error("批量范围无效");
+        batchId = "demo-batch"; return {batchId: batchId, total: 3, settings: settings};
+      }
       if (command === "prepareBatchCard") {
         if (!batchId) throw new Error("演示任务已取消");
         if (payload.position === 2) return {noteId: "demo-2", title: "示例 · 普通图片", skipped: true, reason: "没有可读取的手写绘图"};
